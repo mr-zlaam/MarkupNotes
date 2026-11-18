@@ -53,6 +53,7 @@ from ui.slash_menu import SlashCommand, SlashCommandPalette
 from utils.date_card import render_date_card
 from utils.exporter import export_note_to_html, export_note_to_pdf
 from utils.touch import TouchScrollTracker, is_touch_event
+from utils.transient_scrollbar import TransientScrollBarController
 from utils.icons import (
     create_backup_icon,
     create_export_icon,
@@ -271,6 +272,9 @@ class MarkdownEditor(QTextEdit):
 
         # UI Scaling factor (1.0 = default 100%)
         self.ui_scale: float = 1.0
+
+        # Transient auto-hiding vertical scrollbar
+        self._transient_scrollbar = TransientScrollBarController(self.verticalScrollBar(), parent=self)
 
     def set_ui_scale(self, scale: float) -> None:
         """Set UI scale factor and refresh highlighter and viewport."""
@@ -3263,6 +3267,7 @@ class EditorPanel(QWidget):
             self.editor.setPlainText("")
             self.meta_label.setText("No note selected")
             self.word_count_label.setText("0 words")
+            self.editor._transient_scrollbar.hide_immediately()
             self.editor.blockSignals(False)
             return
 
@@ -3282,6 +3287,7 @@ class EditorPanel(QWidget):
         self.editor._code_scroll_x.clear()
         self.editor._copied_code_block = None
         self.editor._scrollbar_drag = None
+        self.editor._transient_scrollbar.hide_immediately()
 
         self.editor.blockSignals(True)
         self.editor.setPlainText(cleaned_content)
