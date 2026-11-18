@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 import math
 from pathlib import Path
 import re
@@ -43,11 +44,13 @@ from PyQt6.QtWidgets import (
 )
 
 from core.note import Note
+from ui.date_picker import ModernDatePickerDialog
 from ui.dialogs import ModernLinkDialog
 from ui.find_replace import FindReplaceBar
 from ui.highlighter import HR_RE, HTML_KBD_RE, LIST_RE, QUOTE_RE, MarkdownHighlighter
 from ui.selection_toolbar import SelectionFormatToolbar
 from ui.slash_menu import SlashCommand, SlashCommandPalette
+from utils.date_card import render_date_card
 from utils.exporter import export_note_to_html, export_note_to_pdf
 from utils.touch import TouchScrollTracker, is_touch_event
 from utils.icons import (
@@ -249,6 +252,10 @@ class MarkdownEditor(QTextEdit):
         self.slash_palette = SlashCommandPalette(self)
         self.slash_palette.command_selected.connect(self._on_slash_command_selected)
         self._slash_start_pos: Optional[int] = None
+
+        # Dynamic date card interaction state
+        self._date_card_rects: dict[int, tuple[QRectF, date]] = {}
+        self._hovered_date_block: Optional[int] = None
 
         # Floating text format bubble toolbar (Notion-style inline formatting)
         self.format_toolbar = SelectionFormatToolbar(self)
@@ -996,6 +1003,43 @@ class MarkdownEditor(QTextEdit):
             replace_cursor.setPosition(cursor.position(), QTextCursor.MoveMode.KeepAnchor)
             replace_cursor.insertText(cmd.prefix)
             self.setTextCursor(replace_cursor)
+        elif cmd.id == "date":
+            # Remove the typed slash query text
+            replace_cursor = QTextCursor(self.document())
+            replace_cursor.setPosition(slash_pos)
+            replace_cursor.setPosition(cursor.position(), QTextCursor.MoveMode.KeepAnchor)
+            replace_cursor.removeSelectedText()
+            cursor.endEditBlock()
+            self._slash_start_pos = None
+
+            dlg = ModernDatePickerDialog(parent=self)
+            if dlg.exec():
+                chosen_date = dlg.selected_date
+                date_str = chosen_date.isoformat()
+
+                cur_block = self.textCursor().block()
+                cur_text = cur_block.text().strip()
+
+                ins_cursor = QTextCursor(self.document())
+                if not cur_text:
+                    # Current line is empty: replace with date badge and move to clean newline
+                    ins_cursor.setPosition(cur_block.position())
+                    ins_cursor.beginEditBlock()
+                    ins_cursor.insertText(f"@date({date_str})\n")
+                    ins_cursor.endEditBlock()
+                    self.setTextCursor(ins_cursor)
+                else:
+                    # Current line has content: always insert date badge on clean newline below
+                    ins_cursor.setPosition(cur_block.position() + cur_block.length() - 1)
+                    ins_cursor.beginEditBlock()
+                    ins_cursor.insertText(f"\n@date({date_str})\n")
+                    ins_cursor.endEditBlock()
+                    self.setTextCursor(ins_cursor)
+
+            self.setFocus()
+            self.ensureCursorVisible()
+            self.viewport().update()
+            return
         else:
             # Line-level formatting command (checkbox, bullet, number, h1, h2, h3, quote)
             # Transform current line to the requested block format regardless of previous format
@@ -1272,6 +1316,35 @@ class MarkdownEditor(QTextEdit):
                 is_edit_hovered=is_edit_hovered,
                 show_line_numbers=self.code_line_numbers,
                 ui_scale=getattr(self, "ui_scale", 1.0),
+            )
+
+        # 4.5. Render Inactive Date Cards (@date(...))
+        self._date_card_rects.clear()
+        scale = getattr(self, "ui_scale", 1.0)
+        card_h = round(34.0 * scale)
+        for b_num, target_date in self.highlighter.date_blocks.items():
+            if b_num == active_bn:
+                continue
+            b = self.document().findBlockByNumber(b_num)
+            if not b.isValid():
+                continue
+            c = QTextCursor(b)
+            r = self.cursorRect(c)
+            if r.top() > vp_height or r.bottom() < 0:
+                continue
+
+            card_top = float(r.top()) + max(0.0, (float(r.height()) - card_h) / 2.0)
+            avail_w = max(160.0, float(vp_width - r.left() - 28.0))
+            card_rect = QRectF(float(r.left()), card_top, avail_w, card_h)
+            self._date_card_rects[b_num] = (card_rect, target_date)
+            self._rendered_block_rects.append((b_num, b_num, card_rect))
+            is_hovered = self._hovered_date_block == b_num
+            render_date_card(
+                painter,
+                card_rect,
+                target_date,
+                ui_scale=scale,
+                is_hovered=is_hovered,
             )
 
         # 5. Render Checkboxes, Inactive Bullets & Inactive Inline Math ($...$)
@@ -1881,6 +1954,25 @@ class MarkdownEditor(QTextEdit):
             QToolTip.hideText()
             return
 
+        # Inactive date card hover
+        hovered_date: Optional[int] = None
+        for b_num, (card_r, _) in self._date_card_rects.items():
+            if card_r.contains(pos):
+                hovered_date = b_num
+                break
+        if hovered_date != self._hovered_date_block:
+            self._hovered_date_block = hovered_date
+            self.viewport().update()
+
+        if hovered_date is not None:
+            self.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
+            QToolTip.showText(
+                event.globalPosition().toPoint(),
+                "Click to edit date",
+                self.viewport(),
+            )
+            return
+
         # Inactive preview card hover
         if self._region_at_pos(pos) is not None:
             self.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
@@ -2010,6 +2102,22 @@ class MarkdownEditor(QTextEdit):
                 self._toggle_checkbox_at_block(block)
                 return
 
+            # 5.5 Click on Date Card -> open ModernDatePickerDialog
+            for b_num, (card_rect, target_date) in list(self._date_card_rects.items()):
+                if card_rect.contains(pos):
+                    dlg = ModernDatePickerDialog(parent=self, initial_date=target_date)
+                    if dlg.exec():
+                        new_date = dlg.selected_date
+                        b = self.document().findBlockByNumber(b_num)
+                        if b.isValid():
+                            c = QTextCursor(b)
+                            c.beginEditBlock()
+                            c.select(QTextCursor.SelectionType.LineUnderCursor)
+                            c.insertText(f"@date({new_date.isoformat()})")
+                            c.endEditBlock()
+                            self.viewport().update()
+                    return
+
             # Single click on rendered card does NOT blow up the card; double-click is required
             if self._region_at_pos(pos) is not None:
                 return
@@ -2046,6 +2154,17 @@ class MarkdownEditor(QTextEdit):
 
         self._scrollbar_drag = None
         super().mouseReleaseEvent(event)
+
+    def leaveEvent(self, event: QEvent) -> None:
+        """Clear button and card hover states when the cursor leaves the editor."""
+        if self._hovered_date_block is not None:
+            self._hovered_date_block = None
+            self.viewport().update()
+        if self._hovered_copy_btn is not None or self._hovered_edit_btn is not None:
+            self._hovered_copy_btn = None
+            self._hovered_edit_btn = None
+            self.viewport().update()
+        super().leaveEvent(event)
 
     def wheelEvent(self, event: QWheelEvent) -> None:
         """Handle horizontal scrolling on tables and code blocks with trackpad or Shift+Wheel, and Ctrl+Wheel zooming."""

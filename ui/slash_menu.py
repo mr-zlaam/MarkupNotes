@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from utils.icons import draw_checkbox_badge
+from utils.icons import draw_calendar_badge, draw_checkbox_badge
 
 
 @dataclass
@@ -115,6 +115,14 @@ COMMANDS: List[SlashCommand] = [
         prefix="---\n",
         keywords=("divider", "line", "rule", "hr", "separator"),
     ),
+    SlashCommand(
+        id="date",
+        title="Date",
+        description="Insert dynamic date badge",
+        icon="D",
+        prefix="/date",
+        keywords=("date", "today", "yesterday", "tomorrow", "calendar", "time", "day"),
+    ),
 ]
 
 
@@ -154,6 +162,12 @@ class SlashItemDelegate(QStyledItemDelegate):
                 badge_rect,
                 color="#0a84ff" if is_selected else "#0a84ff",
                 box_color="#0a84ff" if is_selected else "#8e8e93",
+            )
+        elif cmd.id == "date":
+            draw_calendar_badge(
+                painter,
+                badge_rect,
+                color="#0a84ff" if is_selected else "#8e8e93",
             )
         else:
             icon_font = QFont(option.font)

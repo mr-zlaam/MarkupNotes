@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import date
 from typing import Dict, List, Optional, Set, Tuple
 
 from PyQt6.QtGui import (
@@ -18,6 +19,7 @@ from utils.code_engine import (
     CodeRegion,
     find_code_regions,
 )
+from utils.date_format import parse_date_string
 from utils.math_engine import (
     FENCE_DISPLAY_MATH_RE,
     INLINE_MATH_RE,
@@ -45,6 +47,7 @@ QUOTE_RE = re.compile(r"^((?:>\s*)+)(.*)$")
 LIST_RE = re.compile(r"^(\s*)([-*+]|\d+\.|\d+\))(\s+)(.*)$")
 HR_RE = re.compile(r"^(?:(?:\s*\*){3,}|\s*(?:-\s*){3,}|\s*(?:_\s*){3,})\s*$")
 FENCE_RE = re.compile(r"^\s*(?:>+\s*)*```.*$")
+DATE_PATTERN = re.compile(r"^\s*(?:@date\(([^)]+)\)|\[date:\s*([^\]]+)\]|@date:\s*([^\s]+))\s*$", re.IGNORECASE)
 
 BOLD_RE = re.compile(r"(\*\*|__)(.+?)\1")
 ITALIC_RE = re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)")
@@ -80,6 +83,7 @@ class MarkdownHighlighter(QSyntaxHighlighter):
         self.math_regions: List[MathRegion] = []
         self.mermaid_regions: List[MermaidRegion] = []
         self.code_regions: List[CodeRegion] = []
+        self.date_blocks: Dict[int, date] = {}
         self._block_modes: Dict[int, Tuple[str, int]] = {}
         self._ui_scale: float = 1.0
         self._init_formats()
@@ -111,6 +115,11 @@ class MarkdownHighlighter(QSyntaxHighlighter):
         # Transparent format preserving normal line height (used for inactive tables)
         self.transparent_line_format = QTextCharFormat()
         self.transparent_line_format.setForeground(QColor(0, 0, 0, 0))
+
+        # Dynamic date keyword format for active line editing
+        self.date_keyword_format = QTextCharFormat()
+        self.date_keyword_format.setForeground(QColor("#0a84ff"))
+        self.date_keyword_format.setFontWeight(QFont.Weight.DemiBold)
 
         # Muted syntax marker format when cursor is on the active line
         self.marker_format = QTextCharFormat()
@@ -314,6 +323,23 @@ class MarkdownHighlighter(QSyntaxHighlighter):
                     new_modes[b] = ("inactive_code", body_pt)
                 new_modes[cr.end_block] = ("inactive_code", fence_pt)
 
+        # 5. Date Cards (@date(...))
+        self.date_blocks.clear()
+        date_pt = max(14, int(round(20 * scale)))
+        b_node = doc.firstBlock()
+        while b_node.isValid():
+            text_line = b_node.text()
+            dm = DATE_PATTERN.match(text_line)
+            if dm:
+                raw_val = dm.group(1) or dm.group(2) or dm.group(3)
+                parsed = parse_date_string(raw_val)
+                if parsed is not None:
+                    bn = b_node.blockNumber()
+                    self.date_blocks[bn] = parsed
+                    if bn != self.active_block_number:
+                        new_modes[bn] = ("inactive_date", date_pt)
+            b_node = b_node.next()
+
         self._block_modes = new_modes
         changed_blocks: Set[int] = set()
         all_keys = set(old_modes.keys()) | set(new_modes.keys())
@@ -358,7 +384,7 @@ class MarkdownHighlighter(QSyntaxHighlighter):
                         self.setFormat(m.start(), 1, self.table_pipe_format)
                 return
 
-            if mode in ("inactive_math", "inactive_mermaid", "inactive_code"):
+            if mode in ("inactive_math", "inactive_mermaid", "inactive_code", "inactive_date"):
                 self.setCurrentBlockState(0)
                 tall_fmt = QTextCharFormat()
                 tall_fmt.setFontPointSize(pt_size)
@@ -412,6 +438,11 @@ class MarkdownHighlighter(QSyntaxHighlighter):
                 hr_inactive_fmt = QTextCharFormat()
                 hr_inactive_fmt.setForeground(QColor(0, 0, 0, 0))
                 self.setFormat(0, len(text), hr_inactive_fmt)
+            return
+
+        # 2.5 Dynamic Date Badge (@date(...))
+        if DATE_PATTERN.match(text):
+            self._format(text, 0, len(text), self.date_keyword_format)
             return
 
         base_point_size: Optional[int] = None

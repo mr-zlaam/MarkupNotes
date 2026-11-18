@@ -208,6 +208,41 @@ def draw_checkbox_badge(
     painter.drawPath(path)
 
 
+def draw_calendar_badge(
+    painter: QPainter,
+    badge_rect: QRect,
+    color: str = "#0a84ff",
+) -> None:
+    """Draw a standalone calendar icon badge into an existing painter."""
+    pen = QPen(QColor(color), 1.4)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    painter.setPen(pen)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+
+    x, y, w, h = badge_rect.x(), badge_rect.y(), badge_rect.width(), badge_rect.height()
+    pad = 6
+    box = QRectF(x + pad, y + pad + 1, w - pad * 2, h - pad * 2 - 1)
+    painter.drawRoundedRect(box, 2.5, 2.5)
+
+    # Binder pins
+    painter.drawLine(QPointF(box.left() + 3.5, box.top() - 2), QPointF(box.left() + 3.5, box.top() + 1))
+    painter.drawLine(QPointF(box.right() - 3.5, box.top() - 2), QPointF(box.right() - 3.5, box.top() + 1))
+
+    # Top separator line
+    sep_y = box.top() + 4.5
+    painter.drawLine(QPointF(box.left(), sep_y), QPointF(box.right(), sep_y))
+
+
+def create_calendar_icon(
+    color: str = "#8e8e93",
+    size: int = 16,
+    stroke_width: float = 1.6,
+) -> QIcon:
+    """Generate a crisp vector calendar icon."""
+    return render_lucide_icon("calendar", color=color, size=size, stroke_width=stroke_width)
+
+
 def create_checkbox_icon(
     color: str = "#0a84ff",
     box_color: str = "#8e8e93",
