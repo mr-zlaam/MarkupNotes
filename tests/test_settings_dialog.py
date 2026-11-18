@@ -396,7 +396,7 @@ class TestSettingsDialog(unittest.TestCase):
         self.assertIn("inline_code", cmd_ids)
 
     def test_editor_zoom_in_out_and_persistence(self) -> None:
-        """Verify Ctrl+/Ctrl- zoom actions resize editor font and persist to config."""
+        """Verify Ctrl+/Ctrl- zoom actions resize entire application UI scale and persist to config."""
         from core.storage import StorageManager
         from ui.main_window import MainWindow
 
@@ -405,41 +405,52 @@ class TestSettingsDialog(unittest.TestCase):
         storage = StorageManager(root_dir=notes_dir)
         win = MainWindow(storage_manager=storage, config_manager=self.config_manager)
 
-        # Base font size is 12
+        # Base font size is 12, base scale is 1.0
         self.assertEqual(win.editor.editor.font().pointSize(), 12)
-        self.assertEqual(self.config_manager.settings.editor.font_size, 12)
+        self.assertEqual(self.config_manager.settings.general.ui_scale, 1.0)
 
-        # Zoom in
+        # Zoom in (1.0 -> 1.1)
         win._on_zoom_in()
+        self.assertEqual(self.config_manager.settings.general.ui_scale, 1.1)
         self.assertEqual(win.editor.editor.font().pointSize(), 13)
-        self.assertEqual(self.config_manager.settings.editor.font_size, 13)
 
-        # Zoom in again
+        # Zoom in again (1.1 -> 1.25)
         win._on_zoom_in()
-        self.assertEqual(win.editor.editor.font().pointSize(), 14)
-        self.assertEqual(self.config_manager.settings.editor.font_size, 14)
+        self.assertEqual(self.config_manager.settings.general.ui_scale, 1.25)
+        self.assertEqual(win.editor.editor.font().pointSize(), 15)
 
-        # Zoom out
+        # Zoom out (1.25 -> 1.1)
         win._on_zoom_out()
+        self.assertEqual(self.config_manager.settings.general.ui_scale, 1.1)
         self.assertEqual(win.editor.editor.font().pointSize(), 13)
-        self.assertEqual(self.config_manager.settings.editor.font_size, 13)
 
-        # Zoom reset
+        # Zoom reset (-> 1.0)
         win._on_zoom_reset()
+        self.assertEqual(self.config_manager.settings.general.ui_scale, 1.0)
         self.assertEqual(win.editor.editor.font().pointSize(), 12)
-        self.assertEqual(self.config_manager.settings.editor.font_size, 12)
 
         # Verify key press simulation directly on editor
         zoom_in_ev = QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_Equal, Qt.KeyboardModifier.ControlModifier, "=")
         win.editor.editor.keyPressEvent(zoom_in_ev)
+        self.assertEqual(self.config_manager.settings.general.ui_scale, 1.1)
         self.assertEqual(win.editor.editor.font().pointSize(), 13)
 
         zoom_out_ev = QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_Minus, Qt.KeyboardModifier.ControlModifier, "-")
         win.editor.editor.keyPressEvent(zoom_out_ev)
+        self.assertEqual(self.config_manager.settings.general.ui_scale, 1.0)
         self.assertEqual(win.editor.editor.font().pointSize(), 12)
 
         win.close()
         win.deleteLater()
+
+    def test_settings_dialog_interface_scale_row(self) -> None:
+        """Verify Interface Scale setting row exists in General settings."""
+        dlg = ModernSettingsDialog(self.config_manager)
+        row_titles = [r.title_lbl.text() for r in dlg.setting_rows]
+        self.assertIn("Interface Scale", row_titles)
+        self.assertIn("Interface Theme", row_titles)
+        dlg.close()
+        dlg.deleteLater()
 
 
 if __name__ == "__main__":

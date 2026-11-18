@@ -281,13 +281,24 @@ QFileDialog QPushButton:hover {
 """
 
 
-def apply_theme(app) -> None:
-    """Apply the application-wide dark styling and ensure assets."""
+def apply_theme(app, ui_scale: float = 1.0) -> None:
+    """Apply the application-wide dark styling and ensure assets with optional UI scaling."""
     from utils.cursors import install_global_button_cursor_filter
     from utils.icons import ensure_chevron_assets
 
     install_global_button_cursor_filter(app)
+
+    base_font_px = max(9, int(round(13 * ui_scale)))
+    search_font_px = max(9, int(round(12 * ui_scale)))
+    editor_font_px = max(10, int(round(16 * ui_scale)))
+    status_font_px = max(8, int(round(11 * ui_scale)))
+
     themed_qss = DARK_THEME_QSS
+    themed_qss = themed_qss.replace("font-size: 13px;", f"font-size: {base_font_px}px;")
+    themed_qss = themed_qss.replace("font-size: 12px;", f"font-size: {search_font_px}px;")
+    themed_qss = themed_qss.replace("font-size: 16px;", f"font-size: {editor_font_px}px;")
+    themed_qss = themed_qss.replace("font-size: 11px;", f"font-size: {status_font_px}px;")
+
     try:
         right_path, down_path = ensure_chevron_assets()
         r_url = right_path.resolve().as_posix()

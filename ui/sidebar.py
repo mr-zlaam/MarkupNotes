@@ -57,6 +57,7 @@ class FolderSidebar(QWidget):
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent=parent)
+        self.ui_scale: float = 1.0
         self._folders: List[Path] = []
         self._is_selection_mode: bool = False
         self._selected_folders: Set[Path] = set()
@@ -67,6 +68,15 @@ class FolderSidebar(QWidget):
         """Update cached folder colors and refresh UI."""
         self._folder_colors = dict(colors)
         self._update_folder_items()
+
+    def set_ui_scale(self, scale: float) -> None:
+        """Update UI scaling factor for sidebar tree and header."""
+        self.ui_scale = scale
+        self.header_stack.setFixedHeight(max(26, int(round(34 * scale))))
+        icon_dim = max(14, int(round(18 * scale)))
+        self.tree_widget.setIconSize(QSize(icon_dim, icon_dim))
+        self.tree_widget.setIndentation(max(12, int(round(16 * scale))))
+        self.tree_widget.viewport().update()
 
     @property
     def is_selection_mode(self) -> bool:

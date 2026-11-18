@@ -549,10 +549,14 @@ class ModernSettingsDialog(QDialog):
         scroll = QScrollArea(parent=self.card)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setStyleSheet("""
             QScrollArea {
                 background-color: transparent;
                 border: none;
+            }
+            QScrollBar:horizontal {
+                height: 0px;
             }
             QScrollBar:vertical {
                 background-color: transparent;
@@ -607,7 +611,35 @@ class ModernSettingsDialog(QDialog):
         layout.addWidget(r2)
         self.setting_rows.append(r2)
 
-        # 3. Clear Folder and Note Color Overrides (moved from Appearance)
+        # 3. Interface Scale (Zoom)
+        scale_combo = ModernComboBox()
+        scale_options = [
+            ("75%", 0.75),
+            ("85%", 0.85),
+            ("90%", 0.90),
+            ("100% (Default)", 1.0),
+            ("110%", 1.10),
+            ("125%", 1.25),
+            ("140%", 1.40),
+            ("160%", 1.60),
+            ("180%", 1.80),
+            ("200%", 2.0),
+        ]
+        for label, _ in scale_options:
+            scale_combo.addItem(label)
+        cur_scale = getattr(cfg.general, "ui_scale", 1.0)
+        closest_idx = min(range(len(scale_options)), key=lambda i: abs(scale_options[i][1] - cur_scale))
+        scale_combo.setCurrentIndex(closest_idx)
+        scale_combo.currentIndexChanged.connect(self._on_ui_scale_changed)
+        r_scale = SettingRow(
+            "Interface Scale",
+            "Overall application UI and editor zoom level (Ctrl+ / Ctrl- / Ctrl+0)",
+            scale_combo,
+        )
+        layout.addWidget(r_scale)
+        self.setting_rows.append(r_scale)
+
+        # 4. Clear Folder and Note Color Overrides (moved from Appearance)
         clear_colors_btn = QPushButton("Reset Custom Colors")
         clear_colors_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         clear_colors_btn.setStyleSheet("background-color: #282830; color: #e0e0e6; border: 1px solid #3c3c46; border-radius: 6px; padding: 5px 12px; font-size: 12px;")
@@ -899,6 +931,13 @@ class ModernSettingsDialog(QDialog):
         self.config_manager.settings.appearance.theme = theme
         self.config_manager.save()
         self.settings_updated.emit()
+
+    def _on_ui_scale_changed(self, index: int) -> None:
+        """Persist UI zoom scale and propagate immediately."""
+        scales = [0.75, 0.85, 0.9, 1.0, 1.1, 1.25, 1.4, 1.6, 1.8, 2.0]
+        if 0 <= index < len(scales):
+            self.config_manager.update_general(ui_scale=scales[index])
+            self.settings_updated.emit()
 
     def _on_clear_custom_colors(self) -> None:
         self.config_manager.clear_all_custom_colors()

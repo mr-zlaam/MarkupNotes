@@ -79,6 +79,7 @@ class MarkdownHighlighter(QSyntaxHighlighter):
         self.mermaid_regions: List[MermaidRegion] = []
         self.code_regions: List[CodeRegion] = []
         self._block_modes: Dict[int, Tuple[str, int]] = {}
+        self.ui_scale: float = 1.0
         self._init_formats()
 
     def _init_formats(self) -> None:
@@ -397,7 +398,8 @@ class MarkdownHighlighter(QSyntaxHighlighter):
             hashes, spaces, _ = h_match.groups()
             level = len(hashes)
             prefix_len = len(hashes) + len(spaces)
-            base_point_size = self.HEADING_SIZES.get(level, 16)
+            raw_pt = self.HEADING_SIZES.get(level, 16)
+            base_point_size = max(10, int(round(raw_pt * getattr(self, "ui_scale", 1.0))))
             base_bold = True
             base_color = QColor(self.HEADING_COLORS.get(level, "#ffffff"))
 

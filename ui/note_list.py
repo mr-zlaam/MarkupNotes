@@ -52,11 +52,14 @@ class NoteCardDelegate(QStyledItemDelegate):
         self.panel = panel
 
     def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:
-        return QSize(option.rect.width(), 64)
+        scale = getattr(self.panel, "ui_scale", 1.0)
+        return QSize(option.rect.width(), max(48, int(round(64 * scale))))
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex) -> None:
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        scale = getattr(self.panel, "ui_scale", 1.0)
 
         # Retrieve note data
         note: Optional[Note] = index.data(Qt.ItemDataRole.UserRole)
@@ -117,28 +120,28 @@ class NoteCardDelegate(QStyledItemDelegate):
 
         # 1. Draw Title with vector Markdown icon
         title_font = QFont(option.font)
-        title_font.setPointSize(10)
+        title_font.setPointSize(max(8, int(round(10 * scale))))
         title_font.setBold(False)
         painter.setFont(title_font)
         painter.setPen(QColor("#ffffff" if is_selected else "#ececec"))
 
         # Vector Markdown emblem
         md_color = self.panel.get_note_color(str(note.path)) or "#8e8e93"
-        md_icon = create_markdown_icon(color=md_color, size=14)
+        md_icon = create_markdown_icon(color=md_color, size=max(12, int(round(14 * scale))))
         md_x = rect.left() + text_left_offset
-        md_y = rect.top() + 11
-        md_icon.paint(painter, md_x, md_y, 16, 14)
+        md_y = rect.top() + int(round(11 * scale))
+        md_icon.paint(painter, md_x, md_y, max(14, int(round(16 * scale))), max(12, int(round(14 * scale))))
 
-        title_left = md_x + 20
+        title_left = md_x + int(round(20 * scale))
         metrics = QFontMetrics(title_font)
         avail_title_w = rect.width() - (title_left - rect.left()) - 10
         elided_title = metrics.elidedText(note.title, Qt.TextElideMode.ElideRight, avail_title_w)
-        title_rect = QRect(title_left, rect.top() + 8, avail_title_w, 20)
+        title_rect = QRect(title_left, rect.top() + int(round(8 * scale)), avail_title_w, max(16, int(round(20 * scale))))
         painter.drawText(title_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, elided_title)
 
         # 2. Draw Timestamp & Snippet line
         meta_font = QFont(option.font)
-        meta_font.setPointSize(9)
+        meta_font.setPointSize(max(7, int(round(9 * scale))))
         painter.setFont(meta_font)
 
         time_text = note.formatted_time
@@ -146,13 +149,15 @@ class NoteCardDelegate(QStyledItemDelegate):
         time_width = time_metrics.horizontalAdvance(time_text)
 
         painter.setPen(QColor("#9e9e9e"))
-        time_rect = QRect(rect.left() + text_left_offset, rect.top() + 32, time_width, 18)
+        meta_y = rect.top() + int(round(32 * scale))
+        meta_h = max(14, int(round(18 * scale)))
+        time_rect = QRect(rect.left() + text_left_offset, meta_y, time_width, meta_h)
         painter.drawText(time_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, time_text)
 
         # Preview Snippet
         snippet_x = time_rect.right() + 8
         snippet_width = max(0, rect.right() - snippet_x - 10)
-        snippet_rect = QRect(snippet_x, rect.top() + 32, snippet_width, 18)
+        snippet_rect = QRect(snippet_x, meta_y, snippet_width, meta_h)
 
         painter.setPen(QColor("#757575"))
         elided_snippet = time_metrics.elidedText(note.preview_snippet, Qt.TextElideMode.ElideRight, snippet_width)
@@ -177,11 +182,18 @@ class NoteListPanel(QWidget):
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent=parent)
+        self.ui_scale: float = 1.0
         self._notes: List[Note] = []
         self._is_selection_mode: bool = False
         self._selected_paths: Set[str] = set()
         self._note_colors: Dict[str, str] = {}
         self._init_ui()
+
+    def set_ui_scale(self, scale: float) -> None:
+        """Update UI scaling factor and refresh note list layout."""
+        self.ui_scale = scale
+        self.header_stack.setFixedHeight(max(26, int(round(34 * scale))))
+        self.list_widget.viewport().update()
 
     def set_note_colors(self, colors: Dict[str, str]) -> None:
         """Update cached note colors and repaint note cards."""

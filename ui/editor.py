@@ -149,6 +149,9 @@ class MarkdownEditor(QTextEdit):
     up_at_top_requested = pyqtSignal()
     find_requested = pyqtSignal(bool)  # is_replace_mode
     find_close_requested = pyqtSignal()
+    zoom_in_requested = pyqtSignal()
+    zoom_out_requested = pyqtSignal()
+    zoom_reset_requested = pyqtSignal()
     zoom_changed = pyqtSignal(int)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
@@ -2017,9 +2020,9 @@ class MarkdownEditor(QTextEdit):
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
             delta_y = event.angleDelta().y()
             if delta_y > 0:
-                self.zoom_in()
+                self.zoom_in_requested.emit()
             elif delta_y < 0:
-                self.zoom_out()
+                self.zoom_out_requested.emit()
             event.accept()
             return
 
@@ -2162,19 +2165,19 @@ class MarkdownEditor(QTextEdit):
         if has_ctrl and not has_alt:
             # Ctrl++ or Ctrl+= zooms in
             if event.key() in (Qt.Key.Key_Plus, Qt.Key.Key_Equal) or event.text() in ("+", "="):
-                self.zoom_in()
+                self.zoom_in_requested.emit()
                 event.accept()
                 return
 
             # Ctrl+- or Ctrl+_ zooms out
             if event.key() in (Qt.Key.Key_Minus, Qt.Key.Key_Underscore) or event.text() in ("-", "_"):
-                self.zoom_out()
+                self.zoom_out_requested.emit()
                 event.accept()
                 return
 
             # Ctrl+0 resets zoom
             if event.key() == Qt.Key.Key_0 or event.text() == "0":
-                self.zoom_reset()
+                self.zoom_reset_requested.emit()
                 event.accept()
                 return
 
@@ -2619,6 +2622,9 @@ class EditorPanel(QWidget):
     open_file_requested = pyqtSignal()
     backup_requested = pyqtSignal()
     settings_requested = pyqtSignal()
+    zoom_in_requested = pyqtSignal()
+    zoom_out_requested = pyqtSignal()
+    zoom_reset_requested = pyqtSignal()
     zoom_changed = pyqtSignal(int)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
@@ -2736,7 +2742,9 @@ class EditorPanel(QWidget):
         self.editor = MarkdownEditor(parent=self)
         self.editor.textChanged.connect(self._on_text_changed)
         self.editor.up_at_top_requested.connect(self._on_up_at_top)
-        self.editor.zoom_changed.connect(self.zoom_changed.emit)
+        self.editor.zoom_in_requested.connect(self.zoom_in_requested.emit)
+        self.editor.zoom_out_requested.connect(self.zoom_out_requested.emit)
+        self.editor.zoom_reset_requested.connect(self.zoom_reset_requested.emit)
 
         # In-note Find & Replace Bar
         self.find_replace_bar = FindReplaceBar(parent=self)
@@ -3080,23 +3088,27 @@ class EditorPanel(QWidget):
             self.content_saved.emit(content)
 
     def zoom_in(self) -> None:
-        """Increase editor text display size."""
-        self.editor.zoom_in()
+        """Request UI zoom in."""
+        self.zoom_in_requested.emit()
 
     def zoom_out(self) -> None:
-        """Decrease editor text display size."""
-        self.editor.zoom_out()
+        """Request UI zoom out."""
+        self.zoom_out_requested.emit()
 
     def zoom_reset(self) -> None:
-        """Reset editor text display size to standard default."""
-        self.editor.zoom_reset()
+        """Request UI zoom reset."""
+        self.zoom_reset_requested.emit()
 
-    def apply_config(self, config: Any) -> None:
-        """Apply live configuration settings to the editor canvas."""
+    def apply_config(self, config: Any, ui_scale: float = 1.0) -> None:
+        """Apply live configuration settings to the editor canvas with optional UI scaling."""
+        if hasattr(config, "general") and hasattr(config.general, "ui_scale"):
+            ui_scale = getattr(config.general, "ui_scale", 1.0)
+
         if hasattr(config, "editor"):
             self._save_timer.setInterval(config.editor.auto_save_delay_ms)
             font = self.editor.font()
-            font.setPointSize(config.editor.font_size)
+            scaled_font_size = max(8, int(round(config.editor.font_size * ui_scale)))
+            font.setPointSize(scaled_font_size)
             if config.editor.font_family and config.editor.font_family != "System":
                 font.setFamily(config.editor.font_family)
             self.editor.setFont(font)
@@ -3107,9 +3119,41 @@ class EditorPanel(QWidget):
             self.editor._tab_size = config.editor.tab_size
             self.editor.setTabStopDistance(float(metrics.horizontalAdvance(' ') * config.editor.tab_size))
 
+            # Scale note title font size proportionally with ui_scale (default 26px)
+            scaled_title_pt = max(16, int(round(26 * ui_scale)))
+            self.title_edit.setStyleSheet(f"""
+                QLineEdit#NoteTitleEdit {{
+                    background-color: transparent;
+                    border: none;
+                    color: #ffffff;
+                    font-size: {scaled_title_pt}px;
+                    font-weight: 700;
+                    padding: 10px 36px 4px 36px;
+                    selection-background-color: #0a84ff;
+                }}
+                QLineEdit#NoteTitleEdit:focus {{
+                    border: none;
+                    background-color: transparent;
+                }}
+                QLineEdit#NoteTitleEdit:disabled {{
+                    color: #555555;
+                }}
+            """)
+
+        # Scale status/metadata labels proportionally
+        scaled_meta_pt = max(8, int(round(11 * ui_scale)))
+        self.meta_label.setStyleSheet(f"color: #7a7a7a; font-size: {scaled_meta_pt}px;")
+        self.word_count_label.setStyleSheet(f"color: #7a7a7a; font-size: {scaled_meta_pt}px; padding-right: 6px;")
+
+        self.editor.highlighter.ui_scale = ui_scale
+
         if hasattr(config, "markdown"):
             self.editor.render_latex = getattr(config.markdown, "render_latex", True)
             self.editor.render_mermaid = getattr(config.markdown, "render_mermaid", True)
             self.editor.smart_list = getattr(config.markdown, "smart_list", True)
             self.editor.code_line_numbers = getattr(config.markdown, "code_line_numbers", False)
-            self.editor.viewport().update()
+
+        self.editor.highlighter.rehighlight()
+        self.editor.viewport().update()
+        if hasattr(config, "editor"):
+            self.zoom_changed.emit(scaled_font_size)

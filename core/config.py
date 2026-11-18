@@ -30,6 +30,7 @@ class GeneralConfig:
     confirm_delete: bool = True
     default_note_name: str = "Untitled Note"
     startup_action: str = "last_note"  # "last_note", "welcome", "empty"
+    ui_scale: float = 1.0
 
 
 @dataclass
@@ -82,6 +83,7 @@ class AppSettings:
             confirm_delete=bool(gen_data.get("confirm_delete", True)),
             default_note_name=str(gen_data.get("default_note_name", "Untitled Note")),
             startup_action=str(gen_data.get("startup_action", "last_note")),
+            ui_scale=float(gen_data.get("ui_scale", 1.0)),
         )
 
         win_data = data.get("window", {})
@@ -287,6 +289,7 @@ class ConfigManager:
         confirm_delete: Optional[bool] = None,
         default_note_name: Optional[str] = None,
         startup_action: Optional[str] = None,
+        ui_scale: Optional[float] = None,
     ) -> None:
         """Update and save general configuration."""
         if confirm_delete is not None:
@@ -295,6 +298,8 @@ class ConfigManager:
             self.settings.general.default_note_name = default_note_name.strip()
         if startup_action is not None and startup_action in ("last_note", "welcome", "empty"):
             self.settings.general.startup_action = startup_action
+        if ui_scale is not None:
+            self.settings.general.ui_scale = round(float(ui_scale), 2)
         self.save()
 
     def update_markdown(

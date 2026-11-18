@@ -19,6 +19,8 @@ from ui.note_list import NoteListPanel
 from ui.sidebar import FolderSidebar
 from utils.file_validator import validate_markdown_file
 
+ZOOM_STEPS: tuple[float, ...] = (0.75, 0.85, 0.9, 1.0, 1.1, 1.25, 1.4, 1.6, 1.8, 2.0)
+
 
 class MainWindow(QMainWindow):
     """Main window hosting the Apple Notes 3-pane interface."""
@@ -114,7 +116,9 @@ class MainWindow(QMainWindow):
         self.editor.open_file_requested.connect(self._on_open_file_dialog)
         self.editor.backup_requested.connect(self.toggle_backup_panel)
         self.editor.settings_requested.connect(self._show_settings_dialog)
-        self.editor.zoom_changed.connect(self._on_editor_zoom_changed)
+        self.editor.zoom_in_requested.connect(self._on_zoom_in)
+        self.editor.zoom_out_requested.connect(self._on_zoom_out)
+        self.editor.zoom_reset_requested.connect(self._on_zoom_reset)
 
         # 4. Far Right: Backup & Version History Panel
         self.backup_panel = BackupPanel(
@@ -135,7 +139,8 @@ class MainWindow(QMainWindow):
 
         self.splitter.setSizes([folders_w, notes_w, editor_w, 0])
         self.splitter.splitterMoved.connect(self._on_splitter_moved)
-        self.editor.apply_config(self.config)
+        self._setup_shortcuts()
+        self._apply_ui_scale(self.config.general.ui_scale)
         self._update_panel_buttons()
 
         self.setCentralWidget(self.splitter)
@@ -227,22 +232,48 @@ class MainWindow(QMainWindow):
         zoom_reset_sc = QShortcut(QKeySequence("Ctrl+0"), self)
         zoom_reset_sc.activated.connect(self._on_zoom_reset)
 
+    def _apply_ui_scale(self, scale: float) -> None:
+        """Apply full interface zoom scale across all panels, editors, and dialogs."""
+        scale = max(0.5, min(3.0, float(scale)))
+        if hasattr(self, "sidebar") and hasattr(self.sidebar, "set_ui_scale"):
+            self.sidebar.set_ui_scale(scale)
+        if hasattr(self, "note_list") and hasattr(self.note_list, "set_ui_scale"):
+            self.note_list.set_ui_scale(scale)
+        if hasattr(self, "editor"):
+            self.editor.apply_config(self.config, ui_scale=scale)
+
+    def _get_next_zoom_step(self, direction: int) -> float:
+        """Find the next discrete UI zoom step from ZOOM_STEPS."""
+        cur_scale = getattr(self.config.general, "ui_scale", 1.0)
+        closest_idx = min(range(len(ZOOM_STEPS)), key=lambda i: abs(ZOOM_STEPS[i] - cur_scale))
+        if direction > 0:
+            target_idx = min(len(ZOOM_STEPS) - 1, closest_idx + 1)
+        elif direction < 0:
+            target_idx = max(0, closest_idx - 1)
+        else:
+            return 1.0
+        return ZOOM_STEPS[target_idx]
+
     def _on_zoom_in(self) -> None:
-        """Increase editor text view font size."""
-        self.editor.zoom_in()
+        """Increase overall application UI and editor zoom level."""
+        new_scale = self._get_next_zoom_step(direction=1)
+        self.config_manager.update_general(ui_scale=new_scale)
+        self._on_settings_updated()
 
     def _on_zoom_out(self) -> None:
-        """Decrease editor text view font size."""
-        self.editor.zoom_out()
+        """Decrease overall application UI and editor zoom level."""
+        new_scale = self._get_next_zoom_step(direction=-1)
+        self.config_manager.update_general(ui_scale=new_scale)
+        self._on_settings_updated()
 
     def _on_zoom_reset(self) -> None:
-        """Reset editor text view font size to standard default."""
-        self.editor.zoom_reset()
+        """Reset overall application UI and editor zoom level to standard 100%."""
+        self.config_manager.update_general(ui_scale=1.0)
+        self._on_settings_updated()
 
     def _on_editor_zoom_changed(self, new_size: int) -> None:
-        """Persist editor font size modifications from zoom actions."""
-        self.config_manager.update_editor(font_size=new_size)
-        self.config = self.config_manager.settings
+        """Handle editor font size notification."""
+        pass
 
     def _show_shortcuts_cheatsheet(self) -> None:
         """Open the modern keyboard shortcuts reference cheatsheet dialog."""
@@ -260,7 +291,7 @@ class MainWindow(QMainWindow):
     def _on_settings_updated(self) -> None:
         """Propagate settings changes live across UI components."""
         self.config = self.config_manager.settings
-        self.editor.apply_config(self.config)
+        self._apply_ui_scale(self.config.general.ui_scale)
         self.sidebar.set_folder_colors(self.config.appearance.folder_colors)
         self.note_list.set_note_colors(self.config.appearance.note_colors)
 
