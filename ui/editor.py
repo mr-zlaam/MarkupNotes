@@ -1274,9 +1274,9 @@ class MarkdownEditor(QTextEdit):
 
             text = block.text()
 
-            # Horizontal rule (draw clean vector divider line)
+            # Horizontal rule (draw clean vector divider line on inactive blocks)
             if HR_RE.match(text):
-                if b_rect.bottom() >= 0:
+                if b_rect.bottom() >= 0 and b_num != active_bn:
                     line_y = float(b_rect.top()) + float(b_rect.height()) / 2.0
                     painter.setPen(QPen(QColor("#48484a"), 1.2))
                     painter.drawLine(QPointF(float(b_rect.left()), line_y), QPointF(float(vp_width - 24.0), line_y))

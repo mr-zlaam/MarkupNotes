@@ -65,6 +65,7 @@ class MainWindow(QMainWindow):
         self._is_saving_internally: bool = False
         self._active_pane_anim: Optional[QVariantAnimation] = None
         self._registered_shortcuts: List[QShortcut] = []
+        self._active_modal_overlay: Optional[QWidget] = None
 
         # File system watcher for external edits
         self.watcher = QFileSystemWatcher(parent=self)
@@ -244,6 +245,14 @@ class MainWindow(QMainWindow):
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         """Handle window-level keyboard navigation and shortcuts."""
+        if self._active_modal_overlay is not None and self._active_modal_overlay.isVisible():
+            if event.key() == Qt.Key.Key_Escape:
+                self._active_modal_overlay.close()
+                event.accept()
+                return
+            event.ignore()
+            return
+
         mods = event.modifiers()
         has_ctrl = bool(mods & Qt.KeyboardModifier.ControlModifier)
         has_alt = bool(mods & Qt.KeyboardModifier.AltModifier)
@@ -321,15 +330,25 @@ class MainWindow(QMainWindow):
     def _show_shortcuts_cheatsheet(self) -> None:
         """Open the modern keyboard shortcuts reference cheatsheet dialog."""
         from ui.shortcuts_dialog import ModernShortcutsDialog
-        ModernShortcutsDialog.show_shortcuts(self)
+        dlg = ModernShortcutsDialog(parent=self)
+        self._active_modal_overlay = dlg
+        try:
+            dlg.exec()
+        finally:
+            self._active_modal_overlay = None
+            dlg.deleteLater()
 
     def _show_settings_dialog(self) -> None:
         """Open the dedicated modern settings dialog overlay."""
         from ui.settings_dialog import ModernSettingsDialog
         dlg = ModernSettingsDialog(self.config_manager, parent=self)
+        self._active_modal_overlay = dlg
         dlg.settings_updated.connect(self._on_settings_updated)
-        dlg.exec()
-        dlg.deleteLater()
+        try:
+            dlg.exec()
+        finally:
+            self._active_modal_overlay = None
+            dlg.deleteLater()
 
     def _on_settings_updated(self) -> None:
         """Propagate settings changes live across UI components."""
@@ -353,6 +372,8 @@ class MainWindow(QMainWindow):
 
     def _on_ctrl_f(self) -> None:
         """Open in-note Find bar if a note is loaded, else focus sidebar search."""
+        if self._active_modal_overlay is not None and self._active_modal_overlay.isVisible():
+            return
         if self.editor._current_note is not None:
             self.editor.open_find(replace_mode=False)
         else:
@@ -360,11 +381,19 @@ class MainWindow(QMainWindow):
 
     def _on_ctrl_h(self) -> None:
         """Open in-note Find & Replace bar with Replace row expanded."""
+        if self._active_modal_overlay is not None and self._active_modal_overlay.isVisible():
+            return
         if self.editor._current_note is not None:
             self.editor.open_find(replace_mode=True)
 
     def _on_escape_pressed(self) -> None:
-        """Cancel selection mode if active in sidebar or note list, or close find bar."""
+        """Cancel selection mode if active in sidebar or note list, or close find bar / modal overlays."""
+        if self._active_modal_overlay is not None and self._active_modal_overlay.isVisible():
+            self._active_modal_overlay.close()
+            return
+        if hasattr(self.editor, "slash_palette") and self.editor.slash_palette.isVisible():
+            self.editor.slash_palette.hide()
+            return
         if hasattr(self.editor, "find_replace_bar") and self.editor.find_replace_bar.isVisible():
             self.editor.close_find()
             return

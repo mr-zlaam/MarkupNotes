@@ -15,11 +15,13 @@ from PyQt6.QtGui import (
     QDesktopServices,
     QFont,
     QKeyEvent,
+    QKeySequence,
     QMouseEvent,
     QPainter,
     QPainterPath,
     QPen,
     QPixmap,
+    QShortcut,
 )
 from PyQt6.QtWidgets import (
     QAbstractButton,
@@ -292,6 +294,10 @@ class ModernSettingsDialog(QDialog):
             }}
             {TOOLTIP_QSS}
         """)
+
+        self._esc_shortcut = QShortcut(QKeySequence("Esc"), self)
+        self._esc_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self._esc_shortcut.activated.connect(self.accept)
 
         self._init_ui()
 
@@ -1060,12 +1066,40 @@ class ModernSettingsDialog(QDialog):
             self._blurred_pm = None
 
     def showEvent(self, event: QEvent) -> None:
-        """Synchronize geometry with parent window and capture backdrop on open."""
+        """Synchronize geometry with parent window, capture backdrop, and focus search on open."""
         if self.parent_win:
             self.setGeometry(self.parent_win.rect())
             self._update_card_geometry()
             self._capture_blurred_backdrop()
         super().showEvent(event)
+        self.raise_()
+        self.activateWindow()
+        if hasattr(self, "search_edit"):
+            self.search_edit.setFocus()
+
+    def accept(self) -> None:
+        if self.parent_win:
+            try:
+                self.parent_win.removeEventFilter(self)
+            except Exception:
+                pass
+        super().accept()
+
+    def reject(self) -> None:
+        if self.parent_win:
+            try:
+                self.parent_win.removeEventFilter(self)
+            except Exception:
+                pass
+        super().reject()
+
+    def closeEvent(self, event) -> None:
+        if self.parent_win:
+            try:
+                self.parent_win.removeEventFilter(self)
+            except Exception:
+                pass
+        super().closeEvent(event)
 
     def paintEvent(self, event: QEvent) -> None:
         """Paint blurred backdrop or dark translucent scrim."""
@@ -1089,11 +1123,24 @@ class ModernSettingsDialog(QDialog):
         super().mousePressEvent(event)
 
     def eventFilter(self, watched: object, event: QEvent) -> bool:
-        """Keep overlay geometry synchronized with parent window and handle search keypresses."""
-        if self.parent_win and watched == self.parent_win and event.type() == QEvent.Type.Resize:
-            self.setGeometry(self.parent_win.rect())
-            self._update_card_geometry()
-            self.update()
+        """Keep overlay geometry synchronized with parent window, block parent shortcuts, and handle keys."""
+        if self.parent_win and watched == self.parent_win:
+            if event.type() == QEvent.Type.Resize:
+                self.setGeometry(self.parent_win.rect())
+                self._update_card_geometry()
+                self.update()
+                return False
+            # Block and absorb all parent window shortcuts and input while settings modal is open
+            if event.type() in (QEvent.Type.Shortcut, QEvent.Type.ShortcutOverride):
+                return True
+            if event.type() == QEvent.Type.KeyPress:
+                key_event: QKeyEvent = event  # type: ignore
+                if key_event.key() == Qt.Key.Key_Escape:
+                    self.accept()
+                    return True
+                return True
+            if event.type() in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease, QEvent.Type.MouseButtonDblClick):
+                return True
         elif hasattr(self, "search_edit") and watched == self.search_edit and event.type() == QEvent.Type.KeyPress:
             key_event: QKeyEvent = event  # type: ignore
             if key_event.key() == Qt.Key.Key_Space and not self.search_edit.text().strip():

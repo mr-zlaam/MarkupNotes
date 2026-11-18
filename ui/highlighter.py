@@ -385,7 +385,12 @@ class MarkdownHighlighter(QSyntaxHighlighter):
 
         # 2. Horizontal rules (---, ***, ___)
         if HR_RE.match(text):
-            self.setFormat(0, len(text), self.hr_format)
+            if is_active:
+                self.setFormat(0, len(text), self.hr_format)
+            else:
+                hr_inactive_fmt = QTextCharFormat()
+                hr_inactive_fmt.setForeground(QColor(0, 0, 0, 0))
+                self.setFormat(0, len(text), hr_inactive_fmt)
             return
 
         base_point_size: Optional[int] = None

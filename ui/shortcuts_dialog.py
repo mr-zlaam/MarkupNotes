@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import List, Optional, Tuple
 
 from PyQt6.QtCore import QEvent, QRectF, QSize, Qt
-from PyQt6.QtGui import QColor, QFont, QKeyEvent, QMouseEvent, QPainter, QPixmap
+from PyQt6.QtGui import QColor, QFont, QKeyEvent, QKeySequence, QMouseEvent, QPainter, QPixmap, QShortcut
 from PyQt6.QtWidgets import (
     QDialog,
     QFrame,
@@ -202,11 +202,14 @@ class ModernShortcutsDialog(QDialog):
             {TOOLTIP_QSS}
         """)
 
+        self._esc_shortcut = QShortcut(QKeySequence("Esc"), self)
+        self._esc_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self._esc_shortcut.activated.connect(self.reject)
+
         self._shortcut_rows: List[Tuple[ShortcutRow, QWidget]] = []
         self._group_widgets: List[Tuple[QWidget, List[ShortcutRow]]] = []
 
         self._init_ui()
-        self.setFocus()
 
     def _capture_blurred_backdrop(self) -> None:
         """Capture the parent window contents and render a Gaussian blurred frosted glass backdrop."""
@@ -233,12 +236,61 @@ class ModernShortcutsDialog(QDialog):
         except Exception:
             self._blurred_pm = None
 
-    def eventFilter(self, obj, event: QEvent) -> bool:
-        """Keep the overlay geometry synchronized with the parent window and intercept Space on search bar."""
-        if self.parent_win and obj == self.parent_win and event.type() == QEvent.Type.Resize:
+    def showEvent(self, event: QEvent) -> None:
+        """Synchronize geometry with parent window, capture backdrop, and focus search on open."""
+        if self.parent_win:
             self.setGeometry(self.parent_win.rect())
             self._update_card_geometry()
-            self.update()
+            self._capture_blurred_backdrop()
+        super().showEvent(event)
+        self.raise_()
+        self.activateWindow()
+        if hasattr(self, "search_edit"):
+            self.search_edit.setFocus()
+
+    def accept(self) -> None:
+        if self.parent_win:
+            try:
+                self.parent_win.removeEventFilter(self)
+            except Exception:
+                pass
+        super().accept()
+
+    def reject(self) -> None:
+        if self.parent_win:
+            try:
+                self.parent_win.removeEventFilter(self)
+            except Exception:
+                pass
+        super().reject()
+
+    def closeEvent(self, event) -> None:
+        if self.parent_win:
+            try:
+                self.parent_win.removeEventFilter(self)
+            except Exception:
+                pass
+        super().closeEvent(event)
+
+    def eventFilter(self, obj, event: QEvent) -> bool:
+        """Keep the overlay geometry synchronized with the parent window, block parent shortcuts, and intercept keys."""
+        if self.parent_win and obj == self.parent_win:
+            if event.type() == QEvent.Type.Resize:
+                self.setGeometry(self.parent_win.rect())
+                self._update_card_geometry()
+                self.update()
+                return False
+            # Block and absorb all parent window shortcuts and input while shortcuts cheatsheet is open
+            if event.type() in (QEvent.Type.Shortcut, QEvent.Type.ShortcutOverride):
+                return True
+            if event.type() == QEvent.Type.KeyPress:
+                key_event: QKeyEvent = event  # type: ignore
+                if key_event.key() == Qt.Key.Key_Escape:
+                    self.reject()
+                    return True
+                return True
+            if event.type() in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease, QEvent.Type.MouseButtonDblClick):
+                return True
         elif hasattr(self, "search_edit") and obj == self.search_edit and event.type() == QEvent.Type.KeyPress:
             key_event: QKeyEvent = event  # type: ignore
             if key_event.key() == Qt.Key.Key_Space and not self.search_edit.text().strip():
