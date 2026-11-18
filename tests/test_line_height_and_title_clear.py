@@ -234,13 +234,21 @@ class TestLineHeightAndTitleClear(unittest.TestCase):
         fmt_at_end = b0.layout().formats()[0].format
         self.assertEqual(fmt_at_end.foreground().color().alpha(), 0, "- must stay hidden when typing text")
 
-        # 2. Cursor beside first letter 'h' (pos 2) -> - must be revealed
+        # 2. Cursor at writing position (pos 2, after '- ') -> - must stay formatted as bullet
         cur.setPosition(2)
         self.editor.setTextCursor(cur)
         self.app.processEvents()
 
-        fmt_beside = b0.layout().formats()[0].format
-        self.assertEqual(fmt_beside.foreground().color().alpha(), 255, "- must be revealed when caret is beside prefix")
+        fmt_at_start = b0.layout().formats()[0].format
+        self.assertEqual(fmt_at_start.foreground().color().alpha(), 0, "- must stay formatted as bullet at writing position")
+
+        # 3. Cursor directly on marker '-' (pos 1 or 0) -> - must be revealed
+        cur.setPosition(1)
+        self.editor.setTextCursor(cur)
+        self.app.processEvents()
+
+        fmt_on_marker = b0.layout().formats()[0].format
+        self.assertEqual(fmt_on_marker.foreground().color().alpha(), 255, "- must be revealed when caret is directly on marker")
 
 
 if __name__ == "__main__":

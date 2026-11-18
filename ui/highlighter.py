@@ -474,7 +474,7 @@ class MarkdownHighlighter(QSyntaxHighlighter):
                     l_indent, l_marker, l_sp, _ = inner_list.groups()
                     m_start = len(prefix) + len(l_indent)
                     inner_prefix_len = len(prefix) + len(l_indent) + len(l_marker) + len(l_sp)
-                    inner_marker_active = is_active and (cursor_pos <= inner_prefix_len)
+                    inner_marker_active = is_active and (cursor_pos < inner_prefix_len)
                     if l_marker in ("-", "*", "+"):
                         if inner_marker_active:
                             self._format(text, m_start, len(l_marker), self.list_marker_format)
@@ -494,7 +494,7 @@ class MarkdownHighlighter(QSyntaxHighlighter):
             indent, marker, space, _ = list_match.groups()
             m_start = len(indent)
             prefix_len = len(indent) + len(marker) + len(space)
-            is_marker_active = is_active and (cursor_pos <= prefix_len)
+            is_marker_active = is_active and (cursor_pos < prefix_len)
             if marker in ("-", "*", "+"):
                 if is_marker_active:
                     self._format(text, m_start, len(marker), self.list_marker_format)

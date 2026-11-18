@@ -1387,7 +1387,7 @@ class MarkdownEditor(QTextEdit):
                             prefix_len = len(indent) + len(marker) + len(space)
                             should_draw_bullet = (
                                 b_num != active_bn
-                                or getattr(self.highlighter, "cursor_pos_in_block", -1) > prefix_len
+                                or getattr(self.highlighter, "cursor_pos_in_block", -1) >= prefix_len
                             )
                             if should_draw_bullet:
                                 c_bl = QTextCursor(block)
@@ -1408,7 +1408,7 @@ class MarkdownEditor(QTextEdit):
                                         prefix_len = len(prefix) + len(l_indent) + len(l_marker) + len(l_sp)
                                         should_draw_bullet = (
                                             b_num != active_bn
-                                            or getattr(self.highlighter, "cursor_pos_in_block", -1) > prefix_len
+                                            or getattr(self.highlighter, "cursor_pos_in_block", -1) >= prefix_len
                                         )
                                         if should_draw_bullet:
                                             c_bl = QTextCursor(block)
