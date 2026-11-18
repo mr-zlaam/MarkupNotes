@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set
 
 from PyQt6.QtCore import QEvent, QObject, QPoint, QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QColor
+from PyQt6.QtGui import QColor, QMouseEvent
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -116,7 +116,7 @@ class FolderSidebar(QWidget):
         self.add_folder_btn.setToolTip("New Folder (Ctrl+Shift+N)")
         self.add_folder_btn.setFixedSize(26, 26)
         self.add_folder_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.add_folder_btn.clicked.connect(self._on_add_folder_clicked)
+        self.add_folder_btn.clicked.connect(lambda: self._on_add_folder_clicked(force_root=False))
         header_layout.addWidget(self.add_folder_btn)
 
         # Domain-owned collapse button for Folders
@@ -253,8 +253,40 @@ class FolderSidebar(QWidget):
         self._update_folder_items()
         self._update_batch_bar()
 
+    def select_all_notes(self) -> None:
+        """Select 'All Notes' (the root view), deselecting any custom folder."""
+        if self._is_selection_mode:
+            return
+        if self.tree_widget.topLevelItemCount() > 0:
+            all_notes_item = self.tree_widget.topLevelItem(0)
+            if self.tree_widget.currentItem() != all_notes_item:
+                self.tree_widget.setCurrentItem(all_notes_item)
+            else:
+                self._refresh_folder_icon_state(all_notes_item, all_notes_item)
+                self.folder_selected.emit(None)
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        """Handle clicking outside the tree widget in sidebar margins."""
+        if not self._is_selection_mode:
+            if event.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton):
+                self.select_all_notes()
+        super().mousePressEvent(event)
+
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
-        """Handle keyboard shortcuts such as Delete/Backspace on the folder tree."""
+        """Handle keyboard shortcuts and mouse interactions on the folder tree."""
+        if (
+            watched in (self.tree_widget, self.tree_widget.viewport())
+            and event.type() == QEvent.Type.MouseButtonPress
+        ):
+            if not self._is_selection_mode:
+                pos = event.pos()
+                if watched == self.tree_widget:
+                    pos = self.tree_widget.viewport().mapFromParent(pos)
+                item = self.tree_widget.itemAt(pos)
+                if item is None:
+                    if event.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton):
+                        self.select_all_notes()
+
         if (
             watched in (self.tree_widget, self.tree_widget.viewport())
             and event.type() == QEvent.Type.KeyPress
@@ -331,13 +363,14 @@ class FolderSidebar(QWidget):
         menu = ModernContextMenu(self)
 
         if item is None:
-            # Right-click in empty space below folders
+            # Right-click in empty space below folders: ensure All Notes is selected
+            self.select_all_notes()
             new_folder_act = menu.addAction(create_plus_icon("#8e8e93", size=14), "New Folder...")
             select_act = menu.addAction(create_checkbox_icon("#8e8e93", size=14), "Select Notes...")
 
             action = menu.exec(self.tree_widget.viewport().mapToGlobal(pos))
             if action == new_folder_act:
-                self._on_add_folder_clicked()
+                self._on_add_folder_clicked(force_root=True)
             elif action == select_act:
                 self.select_all_notes_requested.emit()
             return
@@ -387,7 +420,7 @@ class FolderSidebar(QWidget):
 
             action = menu.exec(self.tree_widget.viewport().mapToGlobal(pos))
             if action == new_folder_act:
-                self._on_add_folder_clicked()
+                self._on_add_folder_clicked(force_root=True)
             elif action == select_act:
                 self.select_all_notes_requested.emit()
 
@@ -530,9 +563,9 @@ class FolderSidebar(QWidget):
         for c in range(item.childCount()):
             self._refresh_folder_icon_state(item.child(c), current_item)
 
-    def _on_add_folder_clicked(self) -> None:
-        # If currently a folder is selected, ask whether to create inside or at root
-        current_item = self.tree_widget.currentItem()
+    def _on_add_folder_clicked(self, force_root: bool = False) -> None:
+        # If currently a folder is selected and not forced to root, prompt for subfolder
+        current_item = None if force_root else self.tree_widget.currentItem()
         current_folder = (
             current_item.data(0, Qt.ItemDataRole.UserRole)
             if current_item is not None
@@ -547,4 +580,6 @@ class FolderSidebar(QWidget):
 
         folder_name, ok = ModernInputDialog.get_text(self, title, prompt, icon_type="folder")
         if ok and folder_name.strip():
-            self.create_folder_requested.emit(folder_name.strip(), current_folder)
+            self.create_folder_requested.emit(
+                folder_name.strip(), None if force_root else current_folder
+            )

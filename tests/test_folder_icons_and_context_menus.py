@@ -94,6 +94,90 @@ class TestFolderIconsAndContextMenus(unittest.TestCase):
 
         sidebar.deleteLater()
 
+    def test_sidebar_empty_space_click_selects_all_notes(self) -> None:
+        """Verify single clicking or right clicking empty space selects All Notes and deselects custom folders."""
+        from PyQt6.QtCore import QPointF, QEvent
+        from PyQt6.QtGui import QMouseEvent
+
+        sidebar = FolderSidebar(parent=None)
+        folder = self.root_path / "ActiveFolder"
+        folder.mkdir()
+        sidebar.set_folders([folder])
+
+        selected_folders = []
+        sidebar.folder_selected.connect(lambda f: selected_folders.append(f))
+
+        # Select custom folder
+        custom_item = sidebar.tree_widget.topLevelItem(1)
+        sidebar.tree_widget.setCurrentItem(custom_item)
+        self.assertEqual(sidebar.tree_widget.currentItem().text(0), "ActiveFolder")
+        self.assertEqual(selected_folders[-1], folder)
+
+        # Simulate left click in empty space below items
+        press_event = QMouseEvent(
+            QEvent.Type.MouseButtonPress,
+            QPointF(50.0, 350.0),
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        release_event = QMouseEvent(
+            QEvent.Type.MouseButtonRelease,
+            QPointF(50.0, 350.0),
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        QApplication.sendEvent(sidebar.tree_widget.viewport(), press_event)
+        QApplication.sendEvent(sidebar.tree_widget.viewport(), release_event)
+
+        # Must deselect custom folder and select All Notes
+        self.assertEqual(sidebar.tree_widget.currentItem().text(0), "All Notes")
+        self.assertIsNone(selected_folders[-1])
+
+        # Reselect custom folder and test right click in empty space
+        sidebar.tree_widget.setCurrentItem(custom_item)
+        self.assertEqual(sidebar.tree_widget.currentItem().text(0), "ActiveFolder")
+
+        r_press = QMouseEvent(
+            QEvent.Type.MouseButtonPress,
+            QPointF(50.0, 350.0),
+            Qt.MouseButton.RightButton,
+            Qt.MouseButton.RightButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        QApplication.sendEvent(sidebar.tree_widget.viewport(), r_press)
+        self.assertEqual(sidebar.tree_widget.currentItem().text(0), "All Notes")
+        self.assertIsNone(selected_folders[-1])
+
+        sidebar.deleteLater()
+
+    def test_sidebar_empty_space_new_folder_creates_root_folder(self) -> None:
+        """Verify New Folder created from empty space context menu is strictly root (parent is None)."""
+        from unittest.mock import patch
+
+        sidebar = FolderSidebar(parent=None)
+        folder = self.root_path / "ExistingFolder"
+        folder.mkdir()
+        sidebar.set_folders([folder])
+
+        # Even if a folder was selected
+        custom_item = sidebar.tree_widget.topLevelItem(1)
+        sidebar.tree_widget.setCurrentItem(custom_item)
+
+        created_folders = []
+        sidebar.create_folder_requested.connect(lambda name, parent: created_folders.append((name, parent)))
+
+        with patch("ui.dialogs.ModernInputDialog.get_text", return_value=("RootFolderTest", True)):
+            sidebar._on_add_folder_clicked(force_root=True)
+
+        self.assertEqual(len(created_folders), 1)
+        name, parent = created_folders[0]
+        self.assertEqual(name, "RootFolderTest")
+        self.assertIsNone(parent)
+
+        sidebar.deleteLater()
+
     def test_sidebar_dynamic_open_folder_state(self) -> None:
         """Verify sidebar updates folder icon between open and closed on expansion/collapse."""
         sidebar = FolderSidebar(parent=None)
