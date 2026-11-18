@@ -157,19 +157,35 @@ def get_code_content_width(region: CodeRegion) -> float:
     return max_w + 36.0  # 16px left + 20px right margin
 
 
+def get_code_gutter_width(region: CodeRegion, fm: Optional[QFontMetricsF] = None) -> float:
+    """Return gutter width if line numbers are shown, based on total lines in the code block."""
+    if fm is None:
+        code_font = QFont("DejaVu Sans Mono", -1)
+        code_font.setPixelSize(13)
+        fm = QFontMetricsF(code_font)
+    num_lines = max(1, len(region.lines))
+    digit_count = max(2, len(str(num_lines)))
+    return fm.horizontalAdvance("9" * digit_count) + 20.0
+
+
 def get_code_scrollbar_geometry(
-    card_rect: QRectF, content_width: float, scroll_x: float
+    card_rect: QRectF,
+    content_width: float,
+    scroll_x: float,
+    gutter_width: float = 0.0,
 ) -> Optional[Tuple[QRectF, QRectF, float]]:
     """Return (track_rect, thumb_rect, max_scroll) if code is wider than the card."""
-    if content_width <= card_rect.width() + 1.0:
+    available_w = max(20.0, card_rect.width() - gutter_width)
+    if content_width <= available_w + 1.0:
         return None
-    max_scroll = content_width - card_rect.width()
+    max_scroll = content_width - available_w
     clamped_scroll = max(0.0, min(scroll_x, max_scroll))
     track_h = 5.0
     track_y = card_rect.bottom() - track_h - 2.0
-    track_rect = QRectF(card_rect.left() + 8.0, track_y, max(10.0, card_rect.width() - 16.0), track_h)
-    track_w = track_rect.width()
-    thumb_w = max(36.0, min(track_w, track_w * (card_rect.width() / content_width)))
+    track_x = card_rect.left() + gutter_width + 8.0
+    track_w = max(10.0, available_w - 16.0)
+    track_rect = QRectF(track_x, track_y, track_w, track_h)
+    thumb_w = max(36.0, min(track_w, track_w * (available_w / content_width)))
     scroll_range = max(1.0, track_w - thumb_w)
     thumb_x = track_rect.left() + (clamped_scroll / max_scroll) * scroll_range
     thumb_rect = QRectF(thumb_x, track_y, thumb_w, track_h)
@@ -204,6 +220,7 @@ def render_code_card(
     is_copied: bool = False,
     is_copy_hovered: bool = False,
     is_edit_hovered: bool = False,
+    show_line_numbers: bool = False,
 ) -> None:
     """Render a rounded code card container with macOS dots, edit/copy buttons, and horizontal scrolling."""
     painter.save()
@@ -300,27 +317,66 @@ def render_code_card(
     fm = QFontMetricsF(code_font)
     line_h = 22.0
 
+    gutter_w = get_code_gutter_width(region, fm) if show_line_numbers else 0.0
+    gutter_x = card_rect.left() + gutter_w
+
     content_w = get_code_content_width(region)
-    max_scroll = max(0.0, content_w - card_rect.width())
+    available_w = max(20.0, card_rect.width() - gutter_w)
+    max_scroll = max(0.0, content_w - available_w)
     clamped_scroll = max(0.0, min(scroll_x, max_scroll))
 
-    # Clip to card body so code never spills outside card boundaries
-    body_clip = card_rect.adjusted(1.0, header_h + 1.0, -1.0, -1.0)
-    painter.setClipRect(body_clip)
+    if show_line_numbers:
+        painter.setPen(QPen(QColor("#2c2c34"), 1.0))
+        painter.drawLine(
+            QPointF(gutter_x, card_rect.top() + header_h),
+            QPointF(gutter_x, card_rect.bottom() - 1.0),
+        )
+        gutter_clip = QRectF(
+            card_rect.left() + 1.0,
+            card_rect.top() + header_h + 1.0,
+            gutter_w - 1.0,
+            card_rect.height() - header_h - 2.0,
+        )
+
+    # Clip to code content body so code never spills outside card or into gutter
+    code_clip_left = gutter_x + 1.0
+    code_clip_w = max(0.0, card_rect.right() - code_clip_left - 1.0)
+    body_clip = QRectF(
+        code_clip_left,
+        card_rect.top() + header_h + 1.0,
+        code_clip_w,
+        card_rect.height() - header_h - 2.0,
+    )
 
     curr_y = card_rect.top() + header_h + 8.0 + fm.ascent()
-    for line in region.lines:
-        curr_x = card_rect.left() + 16.0 - clamped_scroll
+    for idx, line in enumerate(region.lines, 1):
+        if show_line_numbers:
+            painter.save()
+            painter.setClipRect(gutter_clip)
+            painter.setFont(code_font)
+            painter.setPen(QColor("#5c5c68"))
+            num_str = str(idx)
+            num_w = fm.horizontalAdvance(num_str)
+            num_x = gutter_x - 10.0 - num_w
+            painter.drawText(QPointF(num_x, curr_y), num_str)
+            painter.restore()
+
+        painter.save()
+        painter.setClipRect(body_clip)
+        painter.setFont(code_font)
+        start_x = (gutter_x + 12.0) if show_line_numbers else (card_rect.left() + 16.0)
+        curr_x = start_x - clamped_scroll
         tokens = tokenize_code_line(line, region.language)
         for val, col in tokens:
             painter.setPen(col)
             painter.drawText(QPointF(curr_x, curr_y), val)
             curr_x += fm.horizontalAdvance(val)
+        painter.restore()
         curr_y += line_h
 
     # 7. Horizontal scrollbar if code overflows card width
     painter.setClipping(False)
-    sb_info = get_code_scrollbar_geometry(card_rect, content_w, clamped_scroll)
+    sb_info = get_code_scrollbar_geometry(card_rect, content_w, clamped_scroll, gutter_width=gutter_w)
     if sb_info is not None:
         track_rect, thumb_rect, _ = sb_info
         painter.setPen(Qt.PenStyle.NoPen)

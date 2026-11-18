@@ -26,13 +26,33 @@ class LayoutConfig:
 
 
 @dataclass
+class GeneralConfig:
+    confirm_delete: bool = True
+    default_note_name: str = "Untitled Note"
+    startup_action: str = "last_note"  # "last_note", "welcome", "empty"
+
+
+@dataclass
 class EditorConfig:
-    font_size: int = 16
+    font_family: str = "System"
+    font_size: int = 12
+    line_height: float = 1.5
+    word_wrap: bool = True
+    tab_size: int = 2
     auto_save_delay_ms: int = 400
 
 
 @dataclass
+class MarkdownConfig:
+    render_latex: bool = True
+    render_mermaid: bool = True
+    smart_list: bool = True
+    code_line_numbers: bool = False
+
+
+@dataclass
 class AppearanceConfig:
+    theme: str = "dark"  # "dark", "oled", "system"
     folder_colors: Dict[str, str] = field(default_factory=dict)
     note_colors: Dict[str, str] = field(default_factory=dict)
 
@@ -40,19 +60,30 @@ class AppearanceConfig:
 @dataclass
 class BackupConfig:
     auto_backup: bool = False
+    backup_interval_min: int = 15
+    github_repo_url: str = ""
 
 
 @dataclass
 class AppSettings:
+    general: GeneralConfig = field(default_factory=GeneralConfig)
     window: WindowConfig = field(default_factory=WindowConfig)
     layout: LayoutConfig = field(default_factory=LayoutConfig)
     editor: EditorConfig = field(default_factory=EditorConfig)
+    markdown: MarkdownConfig = field(default_factory=MarkdownConfig)
     appearance: AppearanceConfig = field(default_factory=AppearanceConfig)
     backup: BackupConfig = field(default_factory=BackupConfig)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "AppSettings":
         """Instantiate AppSettings with safe fallback defaults for any missing keys."""
+        gen_data = data.get("general", {})
+        general = GeneralConfig(
+            confirm_delete=bool(gen_data.get("confirm_delete", True)),
+            default_note_name=str(gen_data.get("default_note_name", "Untitled Note")),
+            startup_action=str(gen_data.get("startup_action", "last_note")),
+        )
+
         win_data = data.get("window", {})
         win = WindowConfig(
             width=int(win_data.get("width", 1050)),
@@ -70,12 +101,25 @@ class AppSettings:
 
         ed_data = data.get("editor", {})
         ed = EditorConfig(
-            font_size=int(ed_data.get("font_size", 16)),
+            font_family=str(ed_data.get("font_family", "System")),
+            font_size=int(ed_data.get("font_size", 12)),
+            line_height=float(ed_data.get("line_height", 1.5)),
+            word_wrap=bool(ed_data.get("word_wrap", True)),
+            tab_size=int(ed_data.get("tab_size", 2)),
             auto_save_delay_ms=int(ed_data.get("auto_save_delay_ms", 400)),
+        )
+
+        md_data = data.get("markdown", {})
+        markdown = MarkdownConfig(
+            render_latex=bool(md_data.get("render_latex", True)),
+            render_mermaid=bool(md_data.get("render_mermaid", True)),
+            smart_list=bool(md_data.get("smart_list", True)),
+            code_line_numbers=bool(md_data.get("code_line_numbers", False)),
         )
 
         app_data = data.get("appearance", {})
         appearance = AppearanceConfig(
+            theme=str(app_data.get("theme", "dark")),
             folder_colors=dict(app_data.get("folder_colors", {})),
             note_colors=dict(app_data.get("note_colors", {})),
         )
@@ -83,9 +127,19 @@ class AppSettings:
         bak_data = data.get("backup", {})
         backup = BackupConfig(
             auto_backup=bool(bak_data.get("auto_backup", False)),
+            backup_interval_min=int(bak_data.get("backup_interval_min", 15)),
+            github_repo_url=str(bak_data.get("github_repo_url", "")),
         )
 
-        return cls(window=win, layout=lay, editor=ed, appearance=appearance, backup=backup)
+        return cls(
+            general=general,
+            window=win,
+            layout=lay,
+            editor=ed,
+            markdown=markdown,
+            appearance=appearance,
+            backup=backup,
+        )
 
 
 class ConfigManager:
@@ -203,3 +257,71 @@ class ConfigManager:
     def get_auto_backup(self) -> bool:
         """Get automatic backup setting."""
         return self.settings.backup.auto_backup
+
+    def update_editor(
+        self,
+        font_family: Optional[str] = None,
+        font_size: Optional[int] = None,
+        line_height: Optional[float] = None,
+        word_wrap: Optional[bool] = None,
+        tab_size: Optional[int] = None,
+        auto_save_delay_ms: Optional[int] = None,
+    ) -> None:
+        """Update and save editor configuration."""
+        if font_family is not None:
+            self.settings.editor.font_family = font_family
+        if font_size is not None and 10 <= font_size <= 40:
+            self.settings.editor.font_size = font_size
+        if line_height is not None and 1.0 <= line_height <= 3.0:
+            self.settings.editor.line_height = line_height
+        if word_wrap is not None:
+            self.settings.editor.word_wrap = word_wrap
+        if tab_size is not None and tab_size in (2, 4, 8):
+            self.settings.editor.tab_size = tab_size
+        if auto_save_delay_ms is not None and 100 <= auto_save_delay_ms <= 5000:
+            self.settings.editor.auto_save_delay_ms = auto_save_delay_ms
+        self.save()
+
+    def update_general(
+        self,
+        confirm_delete: Optional[bool] = None,
+        default_note_name: Optional[str] = None,
+        startup_action: Optional[str] = None,
+    ) -> None:
+        """Update and save general configuration."""
+        if confirm_delete is not None:
+            self.settings.general.confirm_delete = confirm_delete
+        if default_note_name is not None and default_note_name.strip():
+            self.settings.general.default_note_name = default_note_name.strip()
+        if startup_action is not None and startup_action in ("last_note", "welcome", "empty"):
+            self.settings.general.startup_action = startup_action
+        self.save()
+
+    def update_markdown(
+        self,
+        render_latex: Optional[bool] = None,
+        render_mermaid: Optional[bool] = None,
+        smart_list: Optional[bool] = None,
+        code_line_numbers: Optional[bool] = None,
+    ) -> None:
+        """Update and save markdown rendering configuration."""
+        if render_latex is not None:
+            self.settings.markdown.render_latex = render_latex
+        if render_mermaid is not None:
+            self.settings.markdown.render_mermaid = render_mermaid
+        if smart_list is not None:
+            self.settings.markdown.smart_list = smart_list
+        if code_line_numbers is not None:
+            self.settings.markdown.code_line_numbers = code_line_numbers
+        self.save()
+
+    def clear_all_custom_colors(self) -> None:
+        """Reset all folder and note custom color customizations."""
+        self.settings.appearance.folder_colors.clear()
+        self.settings.appearance.note_colors.clear()
+        self.save()
+
+    def reset_to_defaults(self) -> None:
+        """Reset all settings to default configuration."""
+        self.settings = AppSettings()
+        self.save()

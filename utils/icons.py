@@ -367,6 +367,51 @@ def create_keyboard_icon(
     return render_lucide_icon("keyboard", color=color, size=size, stroke_width=stroke_width)
 
 
+def create_settings_icon(
+    color: str = "#8e8e93",
+    size: int = 16,
+    stroke_width: float = 1.6,
+) -> QIcon:
+    """Generate a crisp vector settings gear icon."""
+    return render_lucide_icon("settings", color=color, size=size, stroke_width=stroke_width)
+
+
+def create_sliders_icon(
+    color: str = "#8e8e93",
+    size: int = 16,
+    stroke_width: float = 1.6,
+) -> QIcon:
+    """Generate a vector sliders icon for general settings."""
+    return render_lucide_icon("sliders-horizontal", color=color, size=size, stroke_width=stroke_width)
+
+
+def create_type_icon(
+    color: str = "#8e8e93",
+    size: int = 16,
+    stroke_width: float = 1.6,
+) -> QIcon:
+    """Generate a vector typography icon for editor font settings."""
+    return render_lucide_icon("type", color=color, size=size, stroke_width=stroke_width)
+
+
+def create_palette_icon(
+    color: str = "#8e8e93",
+    size: int = 16,
+    stroke_width: float = 1.6,
+) -> QIcon:
+    """Generate a vector palette icon for appearance settings."""
+    return render_lucide_icon("palette", color=color, size=size, stroke_width=stroke_width)
+
+
+def create_code_icon(
+    color: str = "#8e8e93",
+    size: int = 16,
+    stroke_width: float = 1.6,
+) -> QIcon:
+    """Generate a vector code brackets icon for markdown settings."""
+    return render_lucide_icon("code", color=color, size=size, stroke_width=stroke_width)
+
+
 def create_badge_pixmap(
     icon: QIcon,
     bg_color: str = "#1a2638",

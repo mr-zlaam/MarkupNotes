@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
     QDialogButtonBox,
     QHBoxLayout,
     QLabel,
+    QLayout,
     QLineEdit,
     QPushButton,
     QVBoxLayout,
@@ -416,14 +417,16 @@ class ModernConfirmDialog(QDialog):
         message: str = "Are you sure?",
         confirm_text: str = "Delete",
         is_destructive: bool = True,
+        custom_icon: Optional[QIcon] = None,
+        dialog_width: int = 450,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(title)
-        self.setFixedWidth(420)
+        self.setFixedWidth(dialog_width)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint)
 
-        confirm_btn_bg = "#e03e3e" if is_destructive else "#0a84ff"
-        confirm_btn_hover = "#f04848" if is_destructive else "#0071e3"
+        confirm_btn_bg = "#e03e3e" if is_destructive else "#4a4a56"
+        confirm_btn_hover = "#f04848" if is_destructive else "#5e5e6c"
 
         self.setStyleSheet(f"""
             QDialog {{
@@ -476,6 +479,7 @@ class ModernConfirmDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 22, 24, 20)
         layout.setSpacing(16)
+        layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
 
         # Header with icon badge and message
         hdr_layout = QHBoxLayout()
@@ -484,7 +488,18 @@ class ModernConfirmDialog(QDialog):
 
         badge_lbl = QLabel(parent=self)
         badge_lbl.setFixedSize(36, 36)
-        if is_destructive:
+        if custom_icon is not None:
+            confirm_icon = custom_icon
+            bg_col = "#321b1e" if is_destructive else "#26262c"
+            border_col = "#522428" if is_destructive else "#3e3e48"
+            pm = create_badge_pixmap(
+                confirm_icon,
+                bg_color=bg_col,
+                border_color=border_col,
+                badge_size=36,
+                icon_size=20,
+            )
+        elif is_destructive:
             confirm_icon = create_trash_icon("#ff453a", size=20)
             pm = create_badge_pixmap(
                 confirm_icon,
@@ -494,11 +509,11 @@ class ModernConfirmDialog(QDialog):
                 icon_size=20,
             )
         else:
-            confirm_icon = create_alert_icon("#0a84ff", size=20)
+            confirm_icon = create_alert_icon("#d8d8de", size=20)
             pm = create_badge_pixmap(
                 confirm_icon,
-                bg_color="#1a2638",
-                border_color="#233b5d",
+                bg_color="#26262c",
+                border_color="#3e3e48",
                 badge_size=36,
                 icon_size=20,
             )
@@ -514,6 +529,7 @@ class ModernConfirmDialog(QDialog):
         msg_lbl = QLabel(message, parent=self)
         msg_lbl.setObjectName("MessageLabel")
         msg_lbl.setWordWrap(True)
+        msg_lbl.setFixedWidth(self.width() - 86)
         title_vbox.addWidget(msg_lbl)
 
         hdr_layout.addLayout(title_vbox, stretch=1)
@@ -539,6 +555,7 @@ class ModernConfirmDialog(QDialog):
         btn_layout.addWidget(self.confirm_btn)
 
         layout.addLayout(btn_layout)
+        self.adjustSize()
 
         # Ensure confirm button has initial focus for instant Enter confirmation
         self.confirm_btn.setFocus()
@@ -558,6 +575,8 @@ class ModernConfirmDialog(QDialog):
         message: str,
         confirm_text: str = "Delete",
         is_destructive: bool = True,
+        custom_icon: Optional[QIcon] = None,
+        dialog_width: int = 450,
     ) -> bool:
         """Show modern confirmation dialog and return True if confirmed."""
         dlg = cls(
@@ -566,6 +585,8 @@ class ModernConfirmDialog(QDialog):
             message=message,
             confirm_text=confirm_text,
             is_destructive=is_destructive,
+            custom_icon=custom_icon,
+            dialog_width=dialog_width,
         )
         return dlg.exec() == QDialog.DialogCode.Accepted
 
@@ -814,6 +835,7 @@ class ModernMessageDialog(QDialog):
         msg_lbl = QLabel(message, parent=self)
         msg_lbl.setObjectName("MessageLabel")
         msg_lbl.setWordWrap(True)
+        msg_lbl.setFixedWidth(self.width() - 86)
         title_vbox.addWidget(msg_lbl)
 
         hdr_layout.addLayout(title_vbox, stretch=1)

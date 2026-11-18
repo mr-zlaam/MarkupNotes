@@ -56,6 +56,7 @@ from utils.icons import (
     create_keyboard_icon,
     create_notes_toggle_icon,
     create_open_file_icon,
+    create_settings_icon,
     create_sidebar_toggle_icon,
 )
 from utils.code_engine import (
@@ -63,6 +64,7 @@ from utils.code_engine import (
     get_code_content_width,
     get_code_copy_button_rect,
     get_code_edit_button_rect,
+    get_code_gutter_width,
     get_code_scrollbar_geometry,
     render_code_card,
 )
@@ -193,6 +195,12 @@ class MarkdownEditor(QTextEdit):
         self._copied_timer.setSingleShot(True)
         self._copied_timer.setInterval(2000)
         self._copied_timer.timeout.connect(self._reset_copied_state)
+
+        # Live markdown rendering toggles
+        self.render_latex: bool = True
+        self.render_mermaid: bool = True
+        self.smart_list: bool = True
+        self.code_line_numbers: bool = False
 
         # Enable mouse and touch tracking
         self.setMouseTracking(True)
@@ -896,10 +904,20 @@ class MarkdownEditor(QTextEdit):
             replace_cursor = QTextCursor(self.document())
             replace_cursor.setPosition(slash_pos)
             replace_cursor.setPosition(cursor.position(), QTextCursor.MoveMode.KeepAnchor)
-            replace_cursor.insertText("```\n\n```")
-            target_pos = slash_pos + 4
+            b_offset = slash_pos - block.position()
+            prefix_nl = "\n" if b_offset > 0 and b_text[:b_offset].strip() else ""
+            replace_cursor.insertText(f"{prefix_nl}```\n\n```")
+            target_pos = slash_pos + len(prefix_nl) + 4
             c = QTextCursor(self.document())
             c.setPosition(target_pos)
+            self.setTextCursor(c)
+        elif cmd.id == "inline_code":
+            replace_cursor = QTextCursor(self.document())
+            replace_cursor.setPosition(slash_pos)
+            replace_cursor.setPosition(cursor.position(), QTextCursor.MoveMode.KeepAnchor)
+            replace_cursor.insertText("``")
+            c = QTextCursor(self.document())
+            c.setPosition(slash_pos + 1)
             self.setTextCursor(c)
         elif cmd.id == "divider":
             replace_cursor = QTextCursor(self.document())
@@ -1105,52 +1123,54 @@ class MarkdownEditor(QTextEdit):
             render_table(painter, table_rect, tr, self.font(), scroll_x=scroll_x)
 
         # 2. Render Inactive Display Math ($$ ... $$)
-        for mr in self.highlighter.math_regions:
-            if mr.start_block <= active_bn <= mr.end_block:
-                continue
-            b_top = self.document().findBlockByNumber(mr.start_block)
-            b_bot = self.document().findBlockByNumber(mr.end_block)
-            if not (b_top.isValid() and b_bot.isValid()):
-                continue
+        if self.render_latex:
+            for mr in self.highlighter.math_regions:
+                if mr.start_block <= active_bn <= mr.end_block:
+                    continue
+                b_top = self.document().findBlockByNumber(mr.start_block)
+                b_bot = self.document().findBlockByNumber(mr.end_block)
+                if not (b_top.isValid() and b_bot.isValid()):
+                    continue
 
-            r_top = self.cursorRect(QTextCursor(b_top))
-            r_bot = self.cursorRect(QTextCursor(b_bot))
-            if r_top.top() > vp_height or r_bot.bottom() < 0:
-                continue
+                r_top = self.cursorRect(QTextCursor(b_top))
+                r_bot = self.cursorRect(QTextCursor(b_bot))
+                if r_top.top() > vp_height or r_bot.bottom() < 0:
+                    continue
 
-            math_rect = QRectF(float(r_top.left()), float(r_top.top()), float(vp_width - r_top.left() - 28), float(r_bot.bottom() - r_top.top()))
-            self._rendered_block_rects.append((mr.start_block, mr.end_block, math_rect))
+                math_rect = QRectF(float(r_top.left()), float(r_top.top()), float(vp_width - r_top.left() - 28), float(r_bot.bottom() - r_top.top()))
+                self._rendered_block_rects.append((mr.start_block, mr.end_block, math_rect))
 
-            pix = render_math_to_pixmap(mr.latex, font_size=19.0, display_mode=True)
-            log_w = pix.width() / pix.devicePixelRatio()
-            log_h = pix.height() / pix.devicePixelRatio()
-            px = math_rect.left() + max(0.0, (math_rect.width() - log_w) / 2.0)
-            py = math_rect.top() + max(0.0, (math_rect.height() - log_h) / 2.0)
-            painter.drawPixmap(QPointF(px, py), pix)
+                pix = render_math_to_pixmap(mr.latex, font_size=19.0, display_mode=True)
+                log_w = pix.width() / pix.devicePixelRatio()
+                log_h = pix.height() / pix.devicePixelRatio()
+                px = math_rect.left() + max(0.0, (math_rect.width() - log_w) / 2.0)
+                py = math_rect.top() + max(0.0, (math_rect.height() - log_h) / 2.0)
+                painter.drawPixmap(QPointF(px, py), pix)
 
         # 3. Render Inactive Mermaid Diagrams (```mermaid ... ```)
-        for mmd in self.highlighter.mermaid_regions:
-            if mmd.start_block <= active_bn <= mmd.end_block:
-                continue
-            b_top = self.document().findBlockByNumber(mmd.start_block)
-            b_bot = self.document().findBlockByNumber(mmd.end_block)
-            if not (b_top.isValid() and b_bot.isValid()):
-                continue
+        if self.render_mermaid:
+            for mmd in self.highlighter.mermaid_regions:
+                if mmd.start_block <= active_bn <= mmd.end_block:
+                    continue
+                b_top = self.document().findBlockByNumber(mmd.start_block)
+                b_bot = self.document().findBlockByNumber(mmd.end_block)
+                if not (b_top.isValid() and b_bot.isValid()):
+                    continue
 
-            r_top = self.cursorRect(QTextCursor(b_top))
-            r_bot = self.cursorRect(QTextCursor(b_bot))
-            if r_top.top() > vp_height or r_bot.bottom() < 0:
-                continue
+                r_top = self.cursorRect(QTextCursor(b_top))
+                r_bot = self.cursorRect(QTextCursor(b_bot))
+                if r_top.top() > vp_height or r_bot.bottom() < 0:
+                    continue
 
-            mmd_rect = QRectF(float(r_top.left()), float(r_top.top()), float(vp_width - r_top.left() - 28), float(r_bot.bottom() - r_top.top()))
-            self._rendered_block_rects.append((mmd.start_block, mmd.end_block, mmd_rect))
+                mmd_rect = QRectF(float(r_top.left()), float(r_top.top()), float(vp_width - r_top.left() - 28), float(r_bot.bottom() - r_top.top()))
+                self._rendered_block_rects.append((mmd.start_block, mmd.end_block, mmd_rect))
 
-            pix = render_mermaid_to_pixmap(mmd.source)
-            log_w = pix.width() / pix.devicePixelRatio()
-            log_h = pix.height() / pix.devicePixelRatio()
-            px = mmd_rect.left() + max(0.0, (mmd_rect.width() - log_w) / 2.0)
-            py = mmd_rect.top() + max(0.0, (mmd_rect.height() - log_h) / 2.0)
-            painter.drawPixmap(QPointF(px, py), pix)
+                pix = render_mermaid_to_pixmap(mmd.source)
+                log_w = pix.width() / pix.devicePixelRatio()
+                log_h = pix.height() / pix.devicePixelRatio()
+                px = mmd_rect.left() + max(0.0, (mmd_rect.width() - log_w) / 2.0)
+                py = mmd_rect.top() + max(0.0, (mmd_rect.height() - log_h) / 2.0)
+                painter.drawPixmap(QPointF(px, py), pix)
 
         # 4. Render Inactive Code Cards (```lang ... ```)
         for cr in self.highlighter.code_regions:
@@ -1177,6 +1197,7 @@ class MarkdownEditor(QTextEdit):
                 is_copied=is_copied,
                 is_copy_hovered=is_copy_hovered,
                 is_edit_hovered=is_edit_hovered,
+                show_line_numbers=self.code_line_numbers,
             )
 
         # 5. Render Checkboxes, Inactive Bullets & Inactive Inline Math ($...$)
@@ -1337,7 +1358,8 @@ class MarkdownEditor(QTextEdit):
 
             # Inline Math on inactive regular blocks (never inside tables or code blocks)
             if (
-                b_num != active_bn
+                self.render_latex
+                and b_num != active_bn
                 and block.userState() != 1
                 and b_num not in self.highlighter._block_modes
                 and ("$" in text or "\\(" in text)
@@ -1487,7 +1509,8 @@ class MarkdownEditor(QTextEdit):
                 card_rect = self._get_code_card_rect(cr)
                 if card_rect is not None and card_rect.contains(pos):
                     content_w = get_code_content_width(cr)
-                    max_s = max(0.0, content_w - (card_rect.width() - 28.0))
+                    gutter_w = get_code_gutter_width(cr) if self.code_line_numbers else 0.0
+                    max_s = max(0.0, content_w - (card_rect.width() - gutter_w))
                     if max_s > 0:
                         return ("code", cr.start_block, max_s)
         return None
@@ -1760,7 +1783,8 @@ class MarkdownEditor(QTextEdit):
                 if card_rect is not None and card_rect.contains(pos):
                     content_w = get_code_content_width(cr)
                     cur_s = self._code_scroll_x.get(cr.start_block, 0.0)
-                    sb = get_code_scrollbar_geometry(card_rect, content_w, cur_s)
+                    gutter_w = get_code_gutter_width(cr) if self.code_line_numbers else 0.0
+                    sb = get_code_scrollbar_geometry(card_rect, content_w, cur_s, gutter_width=gutter_w)
                     if sb is not None and sb[0].contains(pos):
                         self.viewport().setCursor(Qt.CursorShape.ArrowCursor)
                         QToolTip.hideText()
@@ -1856,7 +1880,8 @@ class MarkdownEditor(QTextEdit):
                     if card_rect is not None:
                         content_w = get_code_content_width(cr)
                         cur_s = self._code_scroll_x.get(cr.start_block, 0.0)
-                        sb = get_code_scrollbar_geometry(card_rect, content_w, cur_s)
+                        gutter_w = get_code_gutter_width(cr) if self.code_line_numbers else 0.0
+                        sb = get_code_scrollbar_geometry(card_rect, content_w, cur_s, gutter_width=gutter_w)
                         if sb is not None:
                             track_r, thumb_r, max_s = sb
                             if track_r.contains(pos):
@@ -1975,7 +2000,8 @@ class MarkdownEditor(QTextEdit):
                 card_rect = self._get_code_card_rect(cr)
                 if card_rect is not None and card_rect.contains(pos):
                     content_w = get_code_content_width(cr)
-                    max_s = max(0.0, content_w - card_rect.width())
+                    gutter_w = get_code_gutter_width(cr) if self.code_line_numbers else 0.0
+                    max_s = max(0.0, content_w - (card_rect.width() - gutter_w))
                     if max_s > 0:
                         cur_s = self._code_scroll_x.get(cr.start_block, 0.0)
                         new_s = max(0.0, min(max_s, cur_s - delta_x * 0.8))
@@ -2367,7 +2393,7 @@ class MarkdownEditor(QTextEdit):
             return
 
         # 3. Enter key: Auto-continue checklists and bulleted/numbered lists
-        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and not (
+        if self.smart_list and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and not (
             event.modifiers() & (Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.ControlModifier)
         ):
             continuation = get_auto_continue_prefix(line_text)
@@ -2519,6 +2545,7 @@ class EditorPanel(QWidget):
     expand_notes_requested = pyqtSignal()
     open_file_requested = pyqtSignal()
     backup_requested = pyqtSignal()
+    settings_requested = pyqtSignal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent=parent)
@@ -2609,6 +2636,16 @@ class EditorPanel(QWidget):
         self.shortcuts_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.shortcuts_btn.clicked.connect(self._show_shortcuts_dialog)
         header.addWidget(self.shortcuts_btn)
+
+        # Dedicated Settings Page Button (Ctrl+,)
+        self.settings_btn = QPushButton(parent=self)
+        self.settings_btn.setObjectName("IconButton")
+        self.settings_btn.setIcon(create_settings_icon("#8e8e93", size=15))
+        self.settings_btn.setToolTip("Settings (Ctrl+,)")
+        self.settings_btn.setFixedSize(26, 26)
+        self.settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.settings_btn.clicked.connect(self.settings_requested.emit)
+        header.addWidget(self.settings_btn)
 
         layout.addLayout(header)
 
@@ -2966,3 +3003,24 @@ class EditorPanel(QWidget):
                 self.create_note_with_content.emit(content)
         else:
             self.content_saved.emit(content)
+
+    def apply_config(self, config: Any) -> None:
+        """Apply live configuration settings to the editor canvas."""
+        if hasattr(config, "editor"):
+            self._save_timer.setInterval(config.editor.auto_save_delay_ms)
+            font = self.editor.font()
+            font.setPointSize(config.editor.font_size)
+            if config.editor.font_family and config.editor.font_family != "System":
+                font.setFamily(config.editor.font_family)
+            self.editor.setFont(font)
+            mode = QTextEdit.LineWrapMode.WidgetWidth if config.editor.word_wrap else QTextEdit.LineWrapMode.NoWrap
+            self.editor.setLineWrapMode(mode)
+            metrics = self.editor.fontMetrics()
+            self.editor.setTabStopDistance(float(metrics.horizontalAdvance(' ') * config.editor.tab_size))
+
+        if hasattr(config, "markdown"):
+            self.editor.render_latex = getattr(config.markdown, "render_latex", True)
+            self.editor.render_mermaid = getattr(config.markdown, "render_mermaid", True)
+            self.editor.smart_list = getattr(config.markdown, "smart_list", True)
+            self.editor.code_line_numbers = getattr(config.markdown, "code_line_numbers", False)
+            self.editor.viewport().update()

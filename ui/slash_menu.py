@@ -92,6 +92,22 @@ COMMANDS: List[SlashCommand] = [
         keywords=("quote", "blockquote", "callout", "cite"),
     ),
     SlashCommand(
+        id="code",
+        title="Code block",
+        description="Fenced code snippet with syntax highlighting",
+        icon="</>",
+        prefix="```\n\n```",
+        keywords=("code", "codeblock", "snippet", "syntax", "pre", "block"),
+    ),
+    SlashCommand(
+        id="inline_code",
+        title="Inline code",
+        description="Inline monospace code span",
+        icon="` `",
+        prefix="`",
+        keywords=("inline", "code", "inlinecode", "monospace", "backtick"),
+    ),
+    SlashCommand(
         id="divider",
         title="Divider",
         description="Visually divide blocks with a horizontal line",

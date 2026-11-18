@@ -113,6 +113,7 @@ class MainWindow(QMainWindow):
         self.editor.expand_notes_requested.connect(self._toggle_notes_list)
         self.editor.open_file_requested.connect(self._on_open_file_dialog)
         self.editor.backup_requested.connect(self.toggle_backup_panel)
+        self.editor.settings_requested.connect(self._show_settings_dialog)
 
         # 4. Far Right: Backup & Version History Panel
         self.backup_panel = BackupPanel(
@@ -133,6 +134,7 @@ class MainWindow(QMainWindow):
 
         self.splitter.setSizes([folders_w, notes_w, editor_w, 0])
         self.splitter.splitterMoved.connect(self._on_splitter_moved)
+        self.editor.apply_config(self.config)
         self._update_panel_buttons()
 
         self.setCentralWidget(self.splitter)
@@ -206,10 +208,42 @@ class MainWindow(QMainWindow):
         f1_sc = QShortcut(QKeySequence("F1"), self)
         f1_sc.activated.connect(self._show_shortcuts_cheatsheet)
 
+        # Dedicated Settings Dialog (Ctrl+,)
+        settings_sc = QShortcut(QKeySequence("Ctrl+,"), self)
+        settings_sc.activated.connect(self._show_settings_dialog)
+
     def _show_shortcuts_cheatsheet(self) -> None:
         """Open the modern keyboard shortcuts reference cheatsheet dialog."""
         from ui.shortcuts_dialog import ModernShortcutsDialog
         ModernShortcutsDialog.show_shortcuts(self)
+
+    def _show_settings_dialog(self) -> None:
+        """Open the dedicated modern settings dialog overlay."""
+        from ui.settings_dialog import ModernSettingsDialog
+        dlg = ModernSettingsDialog(self.config_manager, parent=self)
+        dlg.settings_updated.connect(self._on_settings_updated)
+        dlg.exec()
+        dlg.deleteLater()
+
+    def _on_settings_updated(self) -> None:
+        """Propagate settings changes live across UI components."""
+        self.config = self.config_manager.settings
+        self.editor.apply_config(self.config)
+        self.sidebar.set_folder_colors(self.config.appearance.folder_colors)
+        self.note_list.set_note_colors(self.config.appearance.note_colors)
+
+    def restore_default_layout(self) -> None:
+        """Restore all panels, splitters, and geometries to initial factory state."""
+        self.config = self.config_manager.settings
+        folders_w = self.config.layout.folders_width
+        notes_w = self.config.layout.notes_list_width
+        total_w = self.width()
+        editor_w = max(300, total_w - folders_w - notes_w)
+        self.splitter.setSizes([folders_w, notes_w, editor_w, 0])
+        self.sidebar.show()
+        self.note_list.show()
+        self._update_panel_buttons()
+        self._on_settings_updated()
 
     def _on_ctrl_f(self) -> None:
         """Open in-note Find bar if a note is loaded, else focus sidebar search."""
@@ -547,13 +581,15 @@ class MainWindow(QMainWindow):
         if self._current_note is None:
             return
 
-        confirmed = ModernConfirmDialog.ask(
-            self,
-            title="Delete Note",
-            message=f"Are you sure you want to delete '{self._current_note.title}'?",
-            confirm_text="Delete",
-            is_destructive=True,
-        )
+        confirmed = True
+        if self.config_manager.settings.general.confirm_delete:
+            confirmed = ModernConfirmDialog.ask(
+                self,
+                title="Delete Note",
+                message=f"Are you sure you want to delete '{self._current_note.title}'?",
+                confirm_text="Delete",
+                is_destructive=True,
+            )
         if confirmed:
             self.config_manager.set_note_color(str(self._current_note.path), None)
             self.storage.delete_note(self._current_note.path)
@@ -614,13 +650,15 @@ class MainWindow(QMainWindow):
             if count > 0
             else f"Are you sure you want to delete folder '{folder_path.name}'?"
         )
-        confirmed = ModernConfirmDialog.ask(
-            self,
-            title="Delete Folder",
-            message=msg,
-            confirm_text="Delete",
-            is_destructive=True,
-        )
+        confirmed = True
+        if self.config_manager.settings.general.confirm_delete:
+            confirmed = ModernConfirmDialog.ask(
+                self,
+                title="Delete Folder",
+                message=msg,
+                confirm_text="Delete",
+                is_destructive=True,
+            )
         if confirmed:
             self.config_manager.set_folder_color(folder_path.name, None)
             self.storage.delete_folder(folder_path)
@@ -636,13 +674,15 @@ class MainWindow(QMainWindow):
         if count == 0:
             return
         msg = f"Are you sure you want to delete {count} selected folders and all notes inside them? They will be moved to Trash."
-        confirmed = ModernConfirmDialog.ask(
-            self,
-            title=f"Delete {count} Folders",
-            message=msg,
-            confirm_text="Delete",
-            is_destructive=True,
-        )
+        confirmed = True
+        if self.config_manager.settings.general.confirm_delete:
+            confirmed = ModernConfirmDialog.ask(
+                self,
+                title=f"Delete {count} Folders",
+                message=msg,
+                confirm_text="Delete",
+                is_destructive=True,
+            )
         if confirmed:
             for f in folders:
                 self.config_manager.set_folder_color(f.name, None)
@@ -684,13 +724,15 @@ class MainWindow(QMainWindow):
 
     def _on_delete_single_note(self, note: Note) -> None:
         """Delete a single note from right-click context menu."""
-        confirmed = ModernConfirmDialog.ask(
-            self,
-            title="Delete Note",
-            message=f"Are you sure you want to delete '{note.title}'?",
-            confirm_text="Delete",
-            is_destructive=True,
-        )
+        confirmed = True
+        if self.config_manager.settings.general.confirm_delete:
+            confirmed = ModernConfirmDialog.ask(
+                self,
+                title="Delete Note",
+                message=f"Are you sure you want to delete '{note.title}'?",
+                confirm_text="Delete",
+                is_destructive=True,
+            )
         if confirmed:
             self.config_manager.set_note_color(str(note.path), None)
             self.storage.delete_note(note.path)
@@ -706,13 +748,15 @@ class MainWindow(QMainWindow):
         count = len(notes)
         if count == 0:
             return
-        confirmed = ModernConfirmDialog.ask(
-            self,
-            title=f"Delete {count} Notes",
-            message=f"Are you sure you want to delete {count} selected notes? They will be moved to Trash.",
-            confirm_text="Delete",
-            is_destructive=True,
-        )
+        confirmed = True
+        if self.config_manager.settings.general.confirm_delete:
+            confirmed = ModernConfirmDialog.ask(
+                self,
+                title=f"Delete {count} Notes",
+                message=f"Are you sure you want to delete {count} selected notes? They will be moved to Trash.",
+                confirm_text="Delete",
+                is_destructive=True,
+            )
         if confirmed:
             paths = [n.path for n in notes]
             for n in notes:
