@@ -751,14 +751,44 @@ class ModernSettingsDialog(QDialog):
         layout.addWidget(r2)
         self.setting_rows.append(r2)
 
-        # 3. Word Wrap
+        # 3. Horizontal Padding
+        pad_spin = QSpinBox()
+        pad_spin.setRange(16, 160)
+        pad_spin.setSingleStep(4)
+        pad_spin.setValue(getattr(cfg.editor, "horizontal_padding", 36))
+        pad_spin.setSuffix(" px")
+        pad_spin.setStyleSheet("""
+            QSpinBox {
+                background-color: #24242a;
+                color: #f2f2f6;
+                border: 1px solid #3c3c46;
+                border-radius: 6px;
+                padding: 4px 8px;
+                font-size: 13px;
+                min-width: 90px;
+            }
+            QSpinBox:hover {
+                background-color: #2a2a32;
+                border-color: #50505c;
+            }
+            QSpinBox:focus {
+                border-color: #70707e;
+                background-color: #282830;
+            }
+        """)
+        pad_spin.valueChanged.connect(self._on_horizontal_padding_changed)
+        r_pad = SettingRow("Horizontal Padding", "Left and right side margins of the editor canvas (default 36 px)", pad_spin)
+        layout.addWidget(r_pad)
+        self.setting_rows.append(r_pad)
+
+        # 4. Word Wrap
         wrap_toggle = ToggleSwitch(checked=cfg.editor.word_wrap)
         wrap_toggle.toggled.connect(self._on_word_wrap_toggled)
         r3 = SettingRow("Word Wrap", "Soft-wrap long lines to fit the current editor viewport", wrap_toggle)
         layout.addWidget(r3)
         self.setting_rows.append(r3)
 
-        # 4. Tab Width
+        # 5. Tab Width
         tab_combo = ModernComboBox()
         tab_combo.addItems(["2 Spaces", "4 Spaces"])
         tab_combo.setCurrentIndex(0 if cfg.editor.tab_size == 2 else 1)
@@ -766,9 +796,6 @@ class ModernSettingsDialog(QDialog):
         r4 = SettingRow("Tab Indentation Width", "Number of spaces inserted per indentation level", tab_combo)
         layout.addWidget(r4)
         self.setting_rows.append(r4)
-
-        layout.addStretch()
-        return scroll
 
         layout.addStretch()
         return scroll
@@ -915,6 +942,10 @@ class ModernSettingsDialog(QDialog):
         heights = [1.2, 1.4, 1.6, 1.8]
         val = heights[index] if index < len(heights) else 1.4
         self.config_manager.update_editor(line_height=val)
+        self.settings_updated.emit()
+
+    def _on_horizontal_padding_changed(self, pad: int) -> None:
+        self.config_manager.update_editor(horizontal_padding=pad)
         self.settings_updated.emit()
 
     def _on_word_wrap_toggled(self, checked: bool) -> None:

@@ -179,6 +179,10 @@ class TestSettingsDialog(unittest.TestCase):
         # Change font size
         dialog._on_font_size_changed(20)
         self.assertEqual(self.config_manager.settings.editor.font_size, 20)
+
+        # Change horizontal padding
+        dialog._on_horizontal_padding_changed(56)
+        self.assertEqual(self.config_manager.settings.editor.horizontal_padding, 56)
         dialog.close()
 
     def test_editor_panel_settings_button_and_apply_config(self) -> None:
@@ -262,6 +266,7 @@ class TestSettingsDialog(unittest.TestCase):
         self.assertIn("Notes Storage Folder", titles)
         self.assertIn("Font Size", titles)
         self.assertIn("Line Height", titles)
+        self.assertIn("Horizontal Padding", titles)
         self.assertIn("Word Wrap", titles)
         self.assertIn("Tab Indentation Width", titles)
         self.assertIn("Restore Factory Defaults", titles)

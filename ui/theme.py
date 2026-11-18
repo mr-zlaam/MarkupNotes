@@ -133,8 +133,6 @@ QTextEdit#MarkdownEditor, QPlainTextEdit#MarkdownEditor {
     background-color: #1e1e1e;
     color: #e6e6e6;
     border: none;
-    padding: 6px 36px 24px 36px;
-    font-size: 16px;
     selection-background-color: #264f87;
     selection-color: #ffffff;
 }
@@ -336,13 +334,11 @@ def apply_theme(app, ui_scale: float = 1.0) -> None:
 
     base_font_px = max(9, int(round(13 * ui_scale)))
     search_font_px = max(9, int(round(12 * ui_scale)))
-    editor_font_px = max(10, int(round(16 * ui_scale)))
     status_font_px = max(8, int(round(11 * ui_scale)))
 
     themed_qss = DARK_THEME_QSS
     themed_qss = themed_qss.replace("font-size: 13px;", f"font-size: {base_font_px}px;")
     themed_qss = themed_qss.replace("font-size: 12px;", f"font-size: {search_font_px}px;")
-    themed_qss = themed_qss.replace("font-size: 16px;", f"font-size: {editor_font_px}px;")
     themed_qss = themed_qss.replace("font-size: 11px;", f"font-size: {status_font_px}px;")
 
     try:

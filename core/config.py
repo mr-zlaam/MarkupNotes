@@ -41,6 +41,7 @@ class EditorConfig:
     word_wrap: bool = True
     tab_size: int = 2
     auto_save_delay_ms: int = 400
+    horizontal_padding: int = 36
 
 
 @dataclass
@@ -109,6 +110,7 @@ class AppSettings:
             word_wrap=bool(ed_data.get("word_wrap", True)),
             tab_size=int(ed_data.get("tab_size", 2)),
             auto_save_delay_ms=int(ed_data.get("auto_save_delay_ms", 400)),
+            horizontal_padding=int(ed_data.get("horizontal_padding", 36)),
         )
 
         md_data = data.get("markdown", {})
@@ -268,6 +270,7 @@ class ConfigManager:
         word_wrap: Optional[bool] = None,
         tab_size: Optional[int] = None,
         auto_save_delay_ms: Optional[int] = None,
+        horizontal_padding: Optional[int] = None,
     ) -> None:
         """Update and save editor configuration."""
         if font_family is not None:
@@ -282,6 +285,8 @@ class ConfigManager:
             self.settings.editor.tab_size = tab_size
         if auto_save_delay_ms is not None and 100 <= auto_save_delay_ms <= 5000:
             self.settings.editor.auto_save_delay_ms = auto_save_delay_ms
+        if horizontal_padding is not None and 8 <= horizontal_padding <= 300:
+            self.settings.editor.horizontal_padding = horizontal_padding
         self.save()
 
     def update_general(

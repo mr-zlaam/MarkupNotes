@@ -170,6 +170,7 @@ class MarkdownEditor(QTextEdit):
     zoom_out_requested = pyqtSignal()
     zoom_reset_requested = pyqtSignal()
     zoom_changed = pyqtSignal(int)
+    word_wrap_toggled = pyqtSignal(bool)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent=parent)
@@ -177,6 +178,9 @@ class MarkdownEditor(QTextEdit):
         self.setPlaceholderText("Type text or / for commands")
         self.setAcceptRichText(False)
         self._tab_size: int = 2
+        self._horizontal_padding: int = 36
+        self._font_size_pt: int = 12
+        self._font_family: str = "Cantarell"
 
         # Guarantee strict Left-to-Right layout and clean word wrapping
         self.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
@@ -283,48 +287,64 @@ class MarkdownEditor(QTextEdit):
             self.highlighter.ui_scale = float(scale)
         self.viewport().update()
 
-    def zoom_in(self, step: int = 1) -> None:
-        """Increase editor font point size within comfortable bounds (min 8, max 40)."""
-        font = self.font()
-        cur_size = font.pointSize()
-        if cur_size <= 0:
-            cur_size = font.pixelSize() or 12
-        new_size = min(40, cur_size + step)
-        if new_size != cur_size:
-            font.setPointSize(new_size)
-            self.setFont(font)
-            self.document().setDefaultFont(font)
-            metrics = self.fontMetrics()
-            self.setTabStopDistance(float(metrics.horizontalAdvance(' ') * getattr(self, "_tab_size", 2)))
-            self.viewport().update()
-            self.zoom_changed.emit(new_size)
+    def _refresh_editor_style(self) -> None:
+        """Ensure stylesheet preserves dynamic font size, family, and horizontal padding."""
+        pt_size = getattr(self, "_font_size_pt", 12)
+        h_pad = getattr(self, "_horizontal_padding", 36)
+        fam = getattr(self, "_font_family", "")
+        fam_rule = f'font-family: "{fam}";' if fam and fam != "System" else ""
+        self.setStyleSheet(f"""
+            QTextEdit#MarkdownEditor {{
+                font-size: {pt_size}pt;
+                {fam_rule}
+                padding: 6px {h_pad}px 24px {h_pad}px;
+            }}
+        """)
 
-    def zoom_out(self, step: int = 1) -> None:
-        """Decrease editor font point size within comfortable bounds (min 8, max 40)."""
+    def set_font_size(self, size_pt: int) -> None:
+        """Set the editor base font size in points and update stylesheet."""
+        self._font_size_pt = max(8, min(40, size_pt))
         font = self.font()
-        cur_size = font.pointSize()
-        if cur_size <= 0:
-            cur_size = font.pixelSize() or 12
-        new_size = max(8, cur_size - step)
-        if new_size != cur_size:
-            font.setPointSize(new_size)
-            self.setFont(font)
-            self.document().setDefaultFont(font)
-            metrics = self.fontMetrics()
-            self.setTabStopDistance(float(metrics.horizontalAdvance(' ') * getattr(self, "_tab_size", 2)))
-            self.viewport().update()
-            self.zoom_changed.emit(new_size)
-
-    def zoom_reset(self, default_size: int = 12) -> None:
-        """Reset editor font size to standard default (12px)."""
-        font = self.font()
-        font.setPointSize(default_size)
+        font.setPointSize(self._font_size_pt)
+        if hasattr(self, "_font_family") and self._font_family and self._font_family != "System":
+            font.setFamily(self._font_family)
         self.setFont(font)
         self.document().setDefaultFont(font)
         metrics = self.fontMetrics()
         self.setTabStopDistance(float(metrics.horizontalAdvance(' ') * getattr(self, "_tab_size", 2)))
+        self._refresh_editor_style()
         self.viewport().update()
+
+    def zoom_in(self, step: int = 1) -> None:
+        """Increase editor font point size within comfortable bounds (min 8, max 40)."""
+        cur_size = getattr(self, "_font_size_pt", 12)
+        new_size = min(40, cur_size + step)
+        if new_size != cur_size:
+            self.set_font_size(new_size)
+            self.zoom_changed.emit(new_size)
+
+    def zoom_out(self, step: int = 1) -> None:
+        """Decrease editor font point size within comfortable bounds (min 8, max 40)."""
+        cur_size = getattr(self, "_font_size_pt", 12)
+        new_size = max(8, cur_size - step)
+        if new_size != cur_size:
+            self.set_font_size(new_size)
+            self.zoom_changed.emit(new_size)
+
+    def zoom_reset(self, default_size: int = 12) -> None:
+        """Reset editor font size to standard default (12px)."""
+        self.set_font_size(default_size)
         self.zoom_changed.emit(default_size)
+
+    def toggle_word_wrap(self) -> bool:
+        """Toggle soft line wrapping between WidgetWidth and NoWrap."""
+        is_wrapped = (self.lineWrapMode() == QTextEdit.LineWrapMode.WidgetWidth)
+        new_wrapped = not is_wrapped
+        self.setLineWrapMode(
+            QTextEdit.LineWrapMode.WidgetWidth if new_wrapped else QTextEdit.LineWrapMode.NoWrap
+        )
+        self.word_wrap_toggled.emit(new_wrapped)
+        return new_wrapped
 
     def focusOutEvent(self, event) -> None:
         if self.slash_palette.isVisible() and not self.slash_palette.hasFocus():
@@ -2424,6 +2444,14 @@ class MarkdownEditor(QTextEdit):
         has_shift = bool(mods & Qt.KeyboardModifier.ShiftModifier)
         has_alt = bool(mods & Qt.KeyboardModifier.AltModifier)
 
+        # Alt-based productivity shortcuts
+        if has_alt and not has_ctrl:
+            # Alt+W: Toggle Word Wrap
+            if event.key() == Qt.Key.Key_W or event.text().lower() == "w":
+                self.toggle_word_wrap()
+                event.accept()
+                return
+
         # Ctrl-based productivity and markdown formatting shortcuts
         if has_ctrl and not has_alt:
             # Ctrl++ or Ctrl+= zooms in
@@ -2900,6 +2928,7 @@ class EditorPanel(QWidget):
     zoom_out_requested = pyqtSignal()
     zoom_reset_requested = pyqtSignal()
     zoom_changed = pyqtSignal(int)
+    word_wrap_toggled = pyqtSignal(bool)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent=parent)
@@ -3020,6 +3049,7 @@ class EditorPanel(QWidget):
         self.editor.zoom_in_requested.connect(self.zoom_in_requested.emit)
         self.editor.zoom_out_requested.connect(self.zoom_out_requested.emit)
         self.editor.zoom_reset_requested.connect(self.zoom_reset_requested.emit)
+        self.editor.word_wrap_toggled.connect(self.word_wrap_toggled.emit)
 
         # In-note Find & Replace Bar
         self.find_replace_bar = FindReplaceBar(parent=self)
@@ -3376,6 +3406,10 @@ class EditorPanel(QWidget):
         """Request UI zoom reset."""
         self.zoom_reset_requested.emit()
 
+    def toggle_word_wrap(self) -> bool:
+        """Toggle soft word wrap on the underlying markdown editor."""
+        return self.editor.toggle_word_wrap()
+
     def set_ui_scale(self, scale: float) -> None:
         """Propagate UI scale to markdown editor."""
         self.editor.set_ui_scale(scale)
@@ -3388,8 +3422,11 @@ class EditorPanel(QWidget):
 
         if hasattr(config, "editor"):
             self._save_timer.setInterval(config.editor.auto_save_delay_ms)
-            font = self.editor.font()
             scaled_font_size = max(8, int(round(config.editor.font_size * ui_scale)))
+            self.editor._font_size_pt = scaled_font_size
+            if config.editor.font_family and config.editor.font_family != "System":
+                self.editor._font_family = config.editor.font_family
+            font = self.editor.font()
             font.setPointSize(scaled_font_size)
             if config.editor.font_family and config.editor.font_family != "System":
                 font.setFamily(config.editor.font_family)
@@ -3403,6 +3440,8 @@ class EditorPanel(QWidget):
 
             # Scale note title font size proportionally with ui_scale (default 26px)
             scaled_title_pt = max(16, int(round(26 * ui_scale)))
+            h_pad = getattr(config.editor, "horizontal_padding", 36)
+            scaled_h_pad = max(8, int(round(h_pad * ui_scale)))
             self.title_edit.setStyleSheet(f"""
                 QLineEdit#NoteTitleEdit {{
                     background-color: transparent;
@@ -3410,7 +3449,7 @@ class EditorPanel(QWidget):
                     color: #ffffff;
                     font-size: {scaled_title_pt}px;
                     font-weight: 700;
-                    padding: 10px 36px 4px 36px;
+                    padding: 10px {scaled_h_pad}px 4px {scaled_h_pad}px;
                     selection-background-color: #0a84ff;
                 }}
                 QLineEdit#NoteTitleEdit:focus {{
@@ -3421,6 +3460,8 @@ class EditorPanel(QWidget):
                     color: #555555;
                 }}
             """)
+            self.editor._horizontal_padding = scaled_h_pad
+            self.editor._refresh_editor_style()
 
         # Scale status/metadata labels proportionally
         scaled_meta_pt = max(8, int(round(11 * ui_scale)))

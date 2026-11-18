@@ -45,6 +45,7 @@ SHORTCUT_GROUPS: List[Tuple[str, List[Tuple[str, str, List[str]]]]] = [
             ("Heading 3", "Format current line as Heading 3 (###)", ["Ctrl", "3"]),
             ("Blockquote", "Toggle quote block formatting (>)", ["Ctrl", "Shift", "Q"]),
             ("Toggle Checkbox", "Check or uncheck task under cursor", ["Ctrl", "Enter"]),
+            ("Toggle Word Wrap", "Toggle soft line wrapping on or off", ["Alt", "W"]),
             ("Indent List Item", "Indent bullet or task by 2 spaces", ["Tab"]),
             ("Outdent List Item", "Outdent bullet or task item", ["Shift", "Tab"]),
             ("Slash Command Palette", "Open Notion-style block insert palette", ["/"]),

@@ -121,6 +121,7 @@ class MainWindow(QMainWindow):
         self.editor.zoom_in_requested.connect(self._on_zoom_in)
         self.editor.zoom_out_requested.connect(self._on_zoom_out)
         self.editor.zoom_reset_requested.connect(self._on_zoom_reset)
+        self.editor.word_wrap_toggled.connect(self._on_editor_word_wrap_toggled)
 
         # 4. Far Right: Backup & Version History Panel
         self.backup_panel = BackupPanel(
@@ -243,6 +244,12 @@ class MainWindow(QMainWindow):
             zoom_reset_sc.activated.connect(self._on_zoom_reset)
             self._registered_shortcuts.append(zoom_reset_sc)
 
+        # Toggle Word Wrap (Alt+W)
+        alt_w_sc = QShortcut(QKeySequence("Alt+W"), self)
+        alt_w_sc.setContext(Qt.ShortcutContext.WindowShortcut)
+        alt_w_sc.activated.connect(self.editor.toggle_word_wrap)
+        self._registered_shortcuts.append(alt_w_sc)
+
     def keyPressEvent(self, event: QKeyEvent) -> None:
         """Handle window-level keyboard navigation and shortcuts."""
         if self._active_modal_overlay is not None and self._active_modal_overlay.isVisible():
@@ -279,6 +286,13 @@ class MainWindow(QMainWindow):
             # Reset Zoom (Ctrl+0)
             if event.key() == Qt.Key.Key_0 or event.text() == "0":
                 self._on_zoom_reset()
+                event.accept()
+                return
+
+        # Alt+W: Toggle Word Wrap
+        if has_alt and not has_ctrl:
+            if event.key() == Qt.Key.Key_W or event.text().lower() == "w":
+                self.editor.toggle_word_wrap()
                 event.accept()
                 return
 
@@ -326,6 +340,10 @@ class MainWindow(QMainWindow):
     def _on_editor_zoom_changed(self, new_size: int) -> None:
         """Handle editor font size notification."""
         pass
+
+    def _on_editor_word_wrap_toggled(self, is_wrapped: bool) -> None:
+        """Persist updated word wrap preference to configuration manager."""
+        self.config_manager.update_editor(word_wrap=is_wrapped)
 
     def _show_shortcuts_cheatsheet(self) -> None:
         """Open the modern keyboard shortcuts reference cheatsheet dialog."""
