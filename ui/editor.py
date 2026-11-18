@@ -1097,6 +1097,7 @@ class MarkdownEditor(QTextEdit):
         if not (b_top.isValid() and b_bot.isValid()):
             return None
         r_top = self.cursorRect(QTextCursor(b_top))
+        r_bot = self.cursorRect(QTextCursor(b_bot))
 
         scale = getattr(self, "ui_scale", 1.0)
         avail_w = max(100.0, float(self.viewport().width() - r_top.left() - 28.0))
@@ -1217,6 +1218,14 @@ class MarkdownEditor(QTextEdit):
         vp_height = self.viewport().height()
         vp_width = self.viewport().width()
 
+        cur = self.textCursor()
+        has_sel = cur.hasSelection()
+        sel_start = cur.selectionStart() if has_sel else -1
+        sel_end = cur.selectionEnd() if has_sel else -1
+        sel_start_b = self.document().findBlock(sel_start).blockNumber() if has_sel else -1
+        sel_end_b = self.document().findBlock(sel_end).blockNumber() if has_sel else -1
+        sel_bg_color = QColor("#264f87")
+
         self._rendered_block_rects.clear()
 
         # 1. Render Inactive Tables
@@ -1238,6 +1247,14 @@ class MarkdownEditor(QTextEdit):
             self._rendered_block_rects.append((tr.start_block, tr.end_block, table_rect))
             scroll_x = self._table_scroll_x.get(tr.start_block, 0.0)
             render_table(painter, table_rect, tr, self.font(), scroll_x=scroll_x)
+
+            if has_sel and (tr.start_block <= sel_end_b and tr.end_block >= sel_start_b):
+                painter.save()
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                painter.setPen(QPen(QColor("#0a84ff"), 1.2))
+                painter.setBrush(QBrush(QColor(38, 79, 135, 120)))
+                painter.drawRoundedRect(table_rect, 6.0, 6.0)
+                painter.restore()
 
         # 2. Render Inactive Display Math ($$ ... $$)
         if self.render_latex:
@@ -1264,6 +1281,14 @@ class MarkdownEditor(QTextEdit):
                 py = math_rect.top() + max(0.0, (math_rect.height() - log_h) / 2.0)
                 painter.drawPixmap(QPointF(px, py), pix)
 
+                if has_sel and (mr.start_block <= sel_end_b and mr.end_block >= sel_start_b):
+                    painter.save()
+                    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                    painter.setPen(QPen(QColor("#0a84ff"), 1.2))
+                    painter.setBrush(QBrush(QColor(38, 79, 135, 120)))
+                    painter.drawRoundedRect(math_rect, 6.0, 6.0)
+                    painter.restore()
+
         # 3. Render Inactive Mermaid Diagrams (```mermaid ... ```)
         if self.render_mermaid:
             for mmd in self.highlighter.mermaid_regions:
@@ -1288,6 +1313,14 @@ class MarkdownEditor(QTextEdit):
                 px = mmd_rect.left() + max(0.0, (mmd_rect.width() - log_w) / 2.0)
                 py = mmd_rect.top() + max(0.0, (mmd_rect.height() - log_h) / 2.0)
                 painter.drawPixmap(QPointF(px, py), pix)
+
+                if has_sel and (mmd.start_block <= sel_end_b and mmd.end_block >= sel_start_b):
+                    painter.save()
+                    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                    painter.setPen(QPen(QColor("#0a84ff"), 1.2))
+                    painter.setBrush(QBrush(QColor(38, 79, 135, 120)))
+                    painter.drawRoundedRect(mmd_rect, 6.0, 6.0)
+                    painter.restore()
 
         # 4. Render Inactive Code Cards (```lang ... ```)
         for cr in self.highlighter.code_regions:
@@ -1318,6 +1351,29 @@ class MarkdownEditor(QTextEdit):
                 ui_scale=getattr(self, "ui_scale", 1.0),
             )
 
+            if has_sel and (cr.start_block <= sel_end_b and cr.end_block >= sel_start_b):
+                scale = getattr(self, "ui_scale", 1.0)
+                painter.save()
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                painter.setPen(QPen(QColor("#0a84ff"), 1.2))
+                painter.setBrush(QBrush(QColor(38, 79, 135, 120)))
+                corner_r = round(8.0 * scale, 1)
+                b_bot = self.document().findBlockByNumber(cr.end_block)
+                if b_bot.isValid():
+                    r_bot = self.cursorRect(QTextCursor(b_bot))
+                    if r_bot.bottom() > card_rect.bottom():
+                        leak_r = QRectF(card_rect.left(), card_rect.bottom(), card_rect.width(), float(r_bot.bottom() - card_rect.bottom()))
+                        painter.fillRect(leak_r, sel_bg_color)
+                painter.drawRoundedRect(card_rect, corner_r, corner_r)
+                painter.restore()
+            else:
+                b_bot = self.document().findBlockByNumber(cr.end_block)
+                if b_bot.isValid():
+                    r_bot = self.cursorRect(QTextCursor(b_bot))
+                    if r_bot.bottom() > card_rect.bottom():
+                        leak_r = QRectF(card_rect.left(), card_rect.bottom(), card_rect.width(), float(r_bot.bottom() - card_rect.bottom()))
+                        painter.fillRect(leak_r, self.palette().color(self.backgroundRole()))
+
         # 4.5. Render Inactive Date Cards (@date(...))
         self._date_card_rects.clear()
         scale = getattr(self, "ui_scale", 1.0)
@@ -1346,6 +1402,15 @@ class MarkdownEditor(QTextEdit):
                 ui_scale=scale,
                 is_hovered=is_hovered,
             )
+
+            if has_sel and (sel_start_b <= b_num <= sel_end_b):
+                painter.save()
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                painter.setPen(QPen(QColor("#0a84ff"), 1.2))
+                painter.setBrush(QBrush(QColor(38, 79, 135, 120)))
+                corner_r = round(10.0 * scale, 1)
+                painter.drawRoundedRect(card_rect, corner_r, corner_r)
+                painter.restore()
 
         # 5. Render Checkboxes, Inactive Bullets & Inactive Inline Math ($...$)
         # Start strictly from the first visible block in the viewport for O(viewport) performance
@@ -1441,23 +1506,41 @@ class MarkdownEditor(QTextEdit):
             if block.userState() != 1:
                 match = CHECKBOX_PATTERN.match(text)
                 if match:
-                    indent, _, status, _ = match.groups()
+                    indent, full_prefix, status, _ = match.groups()
                     c_cb = QTextCursor(block)
                     c_cb.setPosition(block.position() + len(indent))
                     rect = self.cursorRect(c_cb)
                     if rect.bottom() >= 0:
+                        p_start = block.position() + len(indent)
+                        p_end = p_start + len(full_prefix)
+                        is_sel = has_sel and (p_start < sel_end and p_end > sel_start)
+                        if is_sel:
+                            c_end = QTextCursor(block)
+                            c_end.setPosition(p_end)
+                            r_end = self.cursorRect(c_end)
+                            prefix_rect = QRectF(float(rect.left()), float(rect.top()), max(0.0, float(r_end.left() - rect.left())), float(rect.height()))
+                            painter.fillRect(prefix_rect, sel_bg_color)
                         self._draw_checkbox(painter, rect, status.lower() == "x")
                 else:
                     qm = QUOTE_RE.match(text)
                     if qm:
-                        prefix = qm.group(1)
-                        inner_cb = CHECKBOX_PATTERN.match(text[len(prefix):])
+                        prefix_q = qm.group(1)
+                        inner_cb = CHECKBOX_PATTERN.match(text[len(prefix_q):])
                         if inner_cb:
-                            indent, _, status, _ = inner_cb.groups()
+                            indent, inner_prefix, status, _ = inner_cb.groups()
+                            p_start = block.position() + len(prefix_q) + len(indent)
+                            p_end = p_start + len(inner_prefix)
+                            is_sel = has_sel and (p_start < sel_end and p_end > sel_start)
                             c_cb = QTextCursor(block)
-                            c_cb.setPosition(block.position() + len(prefix) + len(indent))
+                            c_cb.setPosition(p_start)
                             rect = self.cursorRect(c_cb)
                             if rect.bottom() >= 0:
+                                if is_sel:
+                                    c_end = QTextCursor(block)
+                                    c_end.setPosition(p_end)
+                                    r_end = self.cursorRect(c_end)
+                                    prefix_rect = QRectF(float(rect.left()), float(rect.top()), max(0.0, float(r_end.left() - rect.left())), float(rect.height()))
+                                    painter.fillRect(prefix_rect, sel_bg_color)
                                 self._draw_checkbox(painter, rect, status.lower() == "x")
 
             # Bullet list item vector rendering (renders when block is inactive OR caret is in content)
@@ -1480,6 +1563,15 @@ class MarkdownEditor(QTextEdit):
                                 c_bl.setPosition(block.position() + len(indent))
                                 rect = self.cursorRect(c_bl)
                                 if rect.bottom() >= 0:
+                                    p_start = block.position() + len(indent)
+                                    p_end = p_start + len(marker) + len(space)
+                                    is_sel = has_sel and (p_start < sel_end and p_end > sel_start)
+                                    if is_sel:
+                                        c_end = QTextCursor(block)
+                                        c_end.setPosition(p_end)
+                                        r_end = self.cursorRect(c_end)
+                                        prefix_rect = QRectF(float(rect.left()), float(rect.top()), max(0.0, float(r_end.left() - rect.left())), float(rect.height()))
+                                        painter.fillRect(prefix_rect, sel_bg_color)
                                     self._draw_bullet(painter, rect, len(indent))
                     else:
                         qm = QUOTE_RE.match(text)
@@ -1501,6 +1593,15 @@ class MarkdownEditor(QTextEdit):
                                             c_bl.setPosition(block.position() + len(prefix) + len(l_indent))
                                             rect = self.cursorRect(c_bl)
                                             if rect.bottom() >= 0:
+                                                p_start = block.position() + len(prefix) + len(l_indent)
+                                                p_end = p_start + len(l_marker) + len(l_sp)
+                                                is_sel = has_sel and (p_start < sel_end and p_end > sel_start)
+                                                if is_sel:
+                                                    c_end = QTextCursor(block)
+                                                    c_end.setPosition(p_end)
+                                                    r_end = self.cursorRect(c_end)
+                                                    prefix_rect = QRectF(float(rect.left()), float(rect.top()), max(0.0, float(r_end.left() - rect.left())), float(rect.height()))
+                                                    painter.fillRect(prefix_rect, sel_bg_color)
                                                 self._draw_bullet(painter, rect, len(l_indent))
 
             # Inline Math on inactive regular blocks (never inside tables or code blocks)
