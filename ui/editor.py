@@ -2538,7 +2538,18 @@ class MarkdownEditor(QTextEdit):
                     self.viewport().update()
                     return
 
-        # 4. Tab & Shift+Tab: Smart indentation for lists, checkboxes, selections, and text
+        # 4. Standard Enter key / Shift+Enter: reliably insert newline without letting Qt swallow it on empty formatted lines
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and not (
+            event.modifiers() & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier)
+        ):
+            cursor.beginEditBlock()
+            cursor.insertText("\n")
+            cursor.endEditBlock()
+            self.ensureCursorVisible()
+            self.viewport().update()
+            return
+
+        # 5. Tab & Shift+Tab: Smart indentation for lists, checkboxes, selections, and text
         if event.key() == Qt.Key.Key_Tab:
             is_shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
             if cursor.hasSelection():

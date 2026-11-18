@@ -250,6 +250,40 @@ class TestLineHeightAndTitleClear(unittest.TestCase):
         fmt_on_marker = b0.layout().formats()[0].format
         self.assertEqual(fmt_on_marker.foreground().color().alpha(), 255, "- must be revealed when caret is directly on marker")
 
+    def test_consecutive_enter_creates_empty_lines(self) -> None:
+        """Verify that pressing Enter on empty lines reliably adds consecutive empty lines without being swallowed."""
+        from PyQt6.QtCore import QEvent
+        from PyQt6.QtGui import QKeyEvent
+
+        self.editor.setPlainText("Hello")
+        cur = self.editor.textCursor()
+        cur.movePosition(cur.MoveOperation.End)
+        self.editor.setTextCursor(cur)
+
+        ev_enter = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier, "\n")
+
+        # Press Enter once -> "Hello\n" (2 blocks)
+        self.editor.keyPressEvent(ev_enter)
+        self.assertEqual(self.editor.document().blockCount(), 2)
+
+        # Press Enter a second time on the empty line -> "Hello\n\n" (3 blocks)
+        self.editor.keyPressEvent(ev_enter)
+        self.assertEqual(self.editor.document().blockCount(), 3)
+
+        # Press Enter a third time -> "Hello\n\n\n" (4 blocks)
+        self.editor.keyPressEvent(ev_enter)
+        self.assertEqual(self.editor.document().blockCount(), 4)
+        self.assertEqual(self.editor.toPlainText(), "Hello\n\n\n")
+
+        # Test Undo restores each line cleanly
+        self.editor.undo()
+        self.assertEqual(self.editor.document().blockCount(), 3)
+        self.editor.undo()
+        self.assertEqual(self.editor.document().blockCount(), 2)
+        self.editor.undo()
+        self.assertEqual(self.editor.document().blockCount(), 1)
+        self.assertEqual(self.editor.toPlainText(), "Hello")
+
 
 if __name__ == "__main__":
     unittest.main()
