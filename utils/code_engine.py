@@ -144,28 +144,28 @@ def tokenize_code_line(line: str, lang: str) -> List[Tuple[str, QColor]]:
     return tokens
 
 
-def get_code_content_width(region: CodeRegion) -> float:
+def get_code_content_width(region: CodeRegion, ui_scale: float = 1.0) -> float:
     """Calculate the max natural width of all lines in the code block."""
     code_font = QFont("DejaVu Sans Mono", -1)
-    code_font.setPixelSize(13)
+    code_font.setPixelSize(max(9, int(round(13 * ui_scale))))
     fm = QFontMetricsF(code_font)
     max_w = 0.0
     for line in region.lines:
         w = fm.horizontalAdvance(line)
         if w > max_w:
             max_w = w
-    return max_w + 36.0  # 16px left + 20px right margin
+    return max_w + (36.0 * ui_scale)  # 16px left + 20px right margin
 
 
-def get_code_gutter_width(region: CodeRegion, fm: Optional[QFontMetricsF] = None) -> float:
+def get_code_gutter_width(region: CodeRegion, fm: Optional[QFontMetricsF] = None, ui_scale: float = 1.0) -> float:
     """Return gutter width if line numbers are shown, based on total lines in the code block."""
     if fm is None:
         code_font = QFont("DejaVu Sans Mono", -1)
-        code_font.setPixelSize(13)
+        code_font.setPixelSize(max(9, int(round(13 * ui_scale))))
         fm = QFontMetricsF(code_font)
     num_lines = max(1, len(region.lines))
     digit_count = max(2, len(str(num_lines)))
-    return fm.horizontalAdvance("9" * digit_count) + 20.0
+    return fm.horizontalAdvance("9" * digit_count) + (20.0 * ui_scale)
 
 
 def get_code_scrollbar_geometry(
@@ -173,41 +173,43 @@ def get_code_scrollbar_geometry(
     content_width: float,
     scroll_x: float,
     gutter_width: float = 0.0,
+    ui_scale: float = 1.0,
 ) -> Optional[Tuple[QRectF, QRectF, float]]:
     """Return (track_rect, thumb_rect, max_scroll) if code is wider than the card."""
-    available_w = max(20.0, card_rect.width() - gutter_width)
+    available_w = max(20.0 * ui_scale, card_rect.width() - gutter_width)
     if content_width <= available_w + 1.0:
         return None
     max_scroll = content_width - available_w
     clamped_scroll = max(0.0, min(scroll_x, max_scroll))
-    track_h = 5.0
-    track_y = card_rect.bottom() - track_h - 2.0
-    track_x = card_rect.left() + gutter_width + 8.0
-    track_w = max(10.0, available_w - 16.0)
+    track_h = max(3.0, round(5.0 * ui_scale))
+    track_y = card_rect.bottom() - track_h - round(2.0 * ui_scale)
+    track_x = card_rect.left() + gutter_width + round(8.0 * ui_scale)
+    track_w = max(10.0 * ui_scale, available_w - round(16.0 * ui_scale))
     track_rect = QRectF(track_x, track_y, track_w, track_h)
-    thumb_w = max(36.0, min(track_w, track_w * (available_w / content_width)))
+    thumb_w = max(36.0 * ui_scale, min(track_w, track_w * (available_w / content_width)))
     scroll_range = max(1.0, track_w - thumb_w)
     thumb_x = track_rect.left() + (clamped_scroll / max_scroll) * scroll_range
     thumb_rect = QRectF(thumb_x, track_y, thumb_w, track_h)
     return track_rect, thumb_rect, max_scroll
 
 
-def get_code_copy_button_rect(card_rect: QRectF) -> QRectF:
+def get_code_copy_button_rect(card_rect: QRectF, ui_scale: float = 1.0) -> QRectF:
     """Return the QRectF of the Copy button in the code card header."""
-    header_h = 28.0
-    btn_w = 58.0
-    btn_h = 20.0
-    btn_x = card_rect.right() - btn_w - 10.0
+    header_h = round(28.0 * ui_scale)
+    btn_w = round(58.0 * ui_scale)
+    btn_h = round(20.0 * ui_scale)
+    btn_x = card_rect.right() - btn_w - round(10.0 * ui_scale)
     btn_y = card_rect.top() + (header_h - btn_h) / 2.0
     return QRectF(btn_x, btn_y, btn_w, btn_h)
 
 
-def get_code_edit_button_rect(card_rect: QRectF) -> QRectF:
+def get_code_edit_button_rect(card_rect: QRectF, ui_scale: float = 1.0) -> QRectF:
     """Return the QRectF of the Edit button in the code card header."""
-    header_h = 28.0
-    btn_w = 48.0
-    btn_h = 20.0
-    btn_x = card_rect.right() - 58.0 - 10.0 - btn_w - 6.0
+    header_h = round(28.0 * ui_scale)
+    copy_btn_w = round(58.0 * ui_scale)
+    btn_w = round(48.0 * ui_scale)
+    btn_h = round(20.0 * ui_scale)
+    btn_x = card_rect.right() - copy_btn_w - round(10.0 * ui_scale) - btn_w - round(6.0 * ui_scale)
     btn_y = card_rect.top() + (header_h - btn_h) / 2.0
     return QRectF(btn_x, btn_y, btn_w, btn_h)
 
@@ -221,6 +223,7 @@ def render_code_card(
     is_copy_hovered: bool = False,
     is_edit_hovered: bool = False,
     show_line_numbers: bool = False,
+    ui_scale: float = 1.0,
 ) -> None:
     """Render a rounded code card container with macOS dots, edit/copy buttons, and horizontal scrolling."""
     painter.save()
@@ -228,17 +231,19 @@ def render_code_card(
     painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
 
     # 1. Card container background & border
-    painter.setPen(QPen(QColor("#323238"), 1.2))
+    corner_r = round(8.0 * ui_scale, 1)
+    painter.setPen(QPen(QColor("#323238"), max(1.0, 1.2 * ui_scale)))
     painter.setBrush(QBrush(QColor("#16161a")))
-    painter.drawRoundedRect(card_rect, 8.0, 8.0)
+    painter.drawRoundedRect(card_rect, corner_r, corner_r)
 
-    # 2. Header bar (28px)
-    header_h = 28.0
+    # 2. Header bar (28px * ui_scale)
+    header_h = round(28.0 * ui_scale)
     header_rect = QRectF(card_rect.left(), card_rect.top(), card_rect.width(), header_h)
     painter.setBrush(QBrush(QColor("#202026")))
     painter.setPen(Qt.PenStyle.NoPen)
-    painter.drawRoundedRect(header_rect, 8.0, 8.0)
-    painter.drawRect(QRectF(card_rect.left(), card_rect.top() + 18.0, card_rect.width(), 10.0))
+    painter.drawRoundedRect(header_rect, corner_r, corner_r)
+    square_h = round(10.0 * ui_scale)
+    painter.drawRect(QRectF(card_rect.left(), card_rect.top() + header_h - square_h, card_rect.width(), square_h))
 
     # Divider line under header
     painter.setPen(QPen(QColor("#2c2c34"), 1.0))
@@ -248,30 +253,33 @@ def render_code_card(
     )
 
     # 3. macOS window dots
+    dot_r = max(2.5, round(4.2 * ui_scale, 1))
     dots = [
-        (QColor("#ff5f56"), 14.0),
-        (QColor("#ffbd2e"), 26.0),
-        (QColor("#27c93f"), 38.0),
+        (QColor("#ff5f56"), 14.0 * ui_scale),
+        (QColor("#ffbd2e"), 26.0 * ui_scale),
+        (QColor("#27c93f"), 38.0 * ui_scale),
     ]
     painter.setPen(Qt.PenStyle.NoPen)
     for col, dx in dots:
         painter.setBrush(col)
-        painter.drawEllipse(QPointF(card_rect.left() + dx, card_rect.top() + 14.0), 4.2, 4.2)
+        painter.drawEllipse(QPointF(card_rect.left() + dx, card_rect.top() + header_h / 2.0), dot_r, dot_r)
 
     btn_font = QFont("Cantarell", -1)
-    btn_font.setPixelSize(11)
+    btn_font.setPixelSize(max(8, int(round(11 * ui_scale))))
     btn_font.setWeight(QFont.Weight.DemiBold)
     painter.setFont(btn_font)
 
+    btn_r = max(2.0, round(4.0 * ui_scale, 1))
+
     # 4. Copy Button on header right
-    copy_btn_rect = get_code_copy_button_rect(card_rect)
+    copy_btn_rect = get_code_copy_button_rect(card_rect, ui_scale=ui_scale)
     if is_copied:
         painter.setPen(QPen(QColor("#30d158"), 1.0))
         painter.setBrush(QBrush(QColor("#1b3826")))
     else:
         painter.setPen(QPen(QColor("#545462") if is_copy_hovered else QColor("#383842"), 1.0))
         painter.setBrush(QBrush(QColor("#2c2c36") if is_copy_hovered else QColor("#22222a")))
-    painter.drawRoundedRect(copy_btn_rect, 4.0, 4.0)
+    painter.drawRoundedRect(copy_btn_rect, btn_r, btn_r)
 
     if is_copied:
         painter.setPen(QColor("#30d158"))
@@ -284,10 +292,10 @@ def render_code_card(
     )
 
     # 5. Edit Button on header (left of copy button)
-    edit_btn_rect = get_code_edit_button_rect(card_rect)
+    edit_btn_rect = get_code_edit_button_rect(card_rect, ui_scale=ui_scale)
     painter.setPen(QPen(QColor("#545462") if is_edit_hovered else QColor("#383842"), 1.0))
     painter.setBrush(QBrush(QColor("#2c2c36") if is_edit_hovered else QColor("#22222a")))
-    painter.drawRoundedRect(edit_btn_rect, 4.0, 4.0)
+    painter.drawRoundedRect(edit_btn_rect, btn_r, btn_r)
 
     painter.setPen(QColor("#ffffff") if is_edit_hovered else QColor("#a6a6b0"))
     painter.drawText(
@@ -299,11 +307,12 @@ def render_code_card(
     # 6. Language badge (left of edit button)
     badge_name = region.language.upper() if region.language else "CODE"
     badge_font = QFont("Cantarell", -1)
-    badge_font.setPixelSize(11)
+    badge_font.setPixelSize(max(8, int(round(11 * ui_scale))))
     badge_font.setWeight(QFont.Weight.Bold)
     painter.setFont(badge_font)
     painter.setPen(QColor("#8e8e93"))
-    badge_rect = QRectF(edit_btn_rect.left() - 90.0, card_rect.top(), 82.0, header_h)
+    badge_w = 82.0 * ui_scale
+    badge_rect = QRectF(edit_btn_rect.left() - badge_w - round(8.0 * ui_scale), card_rect.top(), badge_w, header_h)
     painter.drawText(
         badge_rect,
         int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
@@ -312,16 +321,17 @@ def render_code_card(
 
     # 6. Code body lines with horizontal scrolling
     code_font = QFont("DejaVu Sans Mono", -1)
-    code_font.setPixelSize(13)
+    code_font.setPixelSize(max(9, int(round(13 * ui_scale))))
     painter.setFont(code_font)
     fm = QFontMetricsF(code_font)
-    line_h = 22.0
+    line_h = round(22.0 * ui_scale)
+    top_pad = round(8.0 * ui_scale)
 
-    gutter_w = get_code_gutter_width(region, fm) if show_line_numbers else 0.0
+    gutter_w = get_code_gutter_width(region, fm, ui_scale=ui_scale) if show_line_numbers else 0.0
     gutter_x = card_rect.left() + gutter_w
 
-    content_w = get_code_content_width(region)
-    available_w = max(20.0, card_rect.width() - gutter_w)
+    content_w = get_code_content_width(region, ui_scale=ui_scale)
+    available_w = max(20.0 * ui_scale, card_rect.width() - gutter_w)
     max_scroll = max(0.0, content_w - available_w)
     clamped_scroll = max(0.0, min(scroll_x, max_scroll))
 
@@ -348,7 +358,7 @@ def render_code_card(
         card_rect.height() - header_h - 2.0,
     )
 
-    curr_y = card_rect.top() + header_h + 8.0 + fm.ascent()
+    curr_y = card_rect.top() + header_h + top_pad + fm.ascent()
     for idx, line in enumerate(region.lines, 1):
         if show_line_numbers:
             painter.save()
@@ -357,14 +367,14 @@ def render_code_card(
             painter.setPen(QColor("#5c5c68"))
             num_str = str(idx)
             num_w = fm.horizontalAdvance(num_str)
-            num_x = gutter_x - 10.0 - num_w
+            num_x = gutter_x - round(10.0 * ui_scale) - num_w
             painter.drawText(QPointF(num_x, curr_y), num_str)
             painter.restore()
 
         painter.save()
         painter.setClipRect(body_clip)
         painter.setFont(code_font)
-        start_x = (gutter_x + 12.0) if show_line_numbers else (card_rect.left() + 16.0)
+        start_x = (gutter_x + round(12.0 * ui_scale)) if show_line_numbers else (card_rect.left() + round(16.0 * ui_scale))
         curr_x = start_x - clamped_scroll
         tokens = tokenize_code_line(line, region.language)
         for val, col in tokens:
@@ -376,13 +386,13 @@ def render_code_card(
 
     # 7. Horizontal scrollbar if code overflows card width
     painter.setClipping(False)
-    sb_info = get_code_scrollbar_geometry(card_rect, content_w, clamped_scroll, gutter_width=gutter_w)
+    sb_info = get_code_scrollbar_geometry(card_rect, content_w, clamped_scroll, gutter_width=gutter_w, ui_scale=ui_scale)
     if sb_info is not None:
         track_rect, thumb_rect, _ = sb_info
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QBrush(QColor("#18181c")))
-        painter.drawRoundedRect(track_rect, 2.5, 2.5)
+        painter.drawRoundedRect(track_rect, 2.5 * ui_scale, 2.5 * ui_scale)
         painter.setBrush(QBrush(QColor("#4e4e58")))
-        painter.drawRoundedRect(thumb_rect, 2.5, 2.5)
+        painter.drawRoundedRect(thumb_rect, 2.5 * ui_scale, 2.5 * ui_scale)
 
     painter.restore()

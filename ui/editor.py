@@ -262,6 +262,16 @@ class MarkdownEditor(QTextEdit):
         self._search_case: bool = False
         self._search_word: bool = False
 
+        # UI Scaling factor (1.0 = default 100%)
+        self.ui_scale: float = 1.0
+
+    def set_ui_scale(self, scale: float) -> None:
+        """Set UI scale factor and refresh highlighter and viewport."""
+        self.ui_scale = float(scale)
+        if hasattr(self, "highlighter"):
+            self.highlighter.ui_scale = float(scale)
+        self.viewport().update()
+
     def zoom_in(self, step: int = 1) -> None:
         """Increase editor font point size within comfortable bounds (min 8, max 40)."""
         font = self.font()
@@ -1044,11 +1054,13 @@ class MarkdownEditor(QTextEdit):
             return None
         r_top = self.cursorRect(QTextCursor(b_top))
 
+        scale = getattr(self, "ui_scale", 1.0)
         avail_w = max(100.0, float(self.viewport().width() - r_top.left() - 28.0))
-        header_h = 28.0
-        line_h = 22.0
-        # Exact height: header (28px) + top padding (8px) + code lines + bottom padding (16px)
-        card_h = header_h + 8.0 + len(cr.lines) * line_h + 16.0
+        header_h = round(28.0 * scale)
+        line_h = round(22.0 * scale)
+        top_pad = round(8.0 * scale)
+        bot_pad = round(16.0 * scale)
+        card_h = header_h + top_pad + len(cr.lines) * line_h + bot_pad
         return QRectF(float(r_top.left()), float(r_top.top()), avail_w, card_h)
 
     def _update_blockquote_margins(self) -> None:
@@ -1259,6 +1271,7 @@ class MarkdownEditor(QTextEdit):
                 is_copy_hovered=is_copy_hovered,
                 is_edit_hovered=is_edit_hovered,
                 show_line_numbers=self.code_line_numbers,
+                ui_scale=getattr(self, "ui_scale", 1.0),
             )
 
         # 5. Render Checkboxes, Inactive Bullets & Inactive Inline Math ($...$)
@@ -1441,57 +1454,62 @@ class MarkdownEditor(QTextEdit):
         painter.end()
 
     def _draw_bullet(self, painter: QPainter, cursor_rect: QRect, indent_len: int) -> None:
-        """Draw an Apple Notes-style vector bullet glyph (dot, ring, or square) at cursor_rect."""
+        """Draw an Apple Notes-style vector bullet glyph (dot, ring, or square) scaled with ui_scale."""
+        scale = getattr(self, "ui_scale", 1.0)
         level = max(0, indent_len // 2)
-        cx = float(cursor_rect.left()) + 10.0
+        cx = float(cursor_rect.left()) + 10.0 * scale
         cy = float(cursor_rect.top()) + float(cursor_rect.height()) / 2.0
 
         if level == 0:
             # Level 0: Solid circular bullet
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QBrush(QColor("#0a84ff")))
-            painter.drawEllipse(QPointF(cx, cy), 3.0, 3.0)
+            dot_r = max(1.5, round(3.0 * scale, 1))
+            painter.drawEllipse(QPointF(cx, cy), dot_r, dot_r)
         elif level == 1:
             # Level 1: Open ring bullet
-            pen = QPen(QColor("#0a84ff"), 1.6)
+            pen = QPen(QColor("#0a84ff"), max(1.0, round(1.6 * scale, 1)))
             pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             painter.setPen(pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawEllipse(QPointF(cx, cy), 2.7, 2.7)
+            ring_r = max(1.5, round(2.7 * scale, 1))
+            painter.drawEllipse(QPointF(cx, cy), ring_r, ring_r)
         else:
             # Level 2+: Solid square bullet
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QBrush(QColor("#0a84ff")))
-            sq = 4.8
+            sq = max(2.5, round(4.8 * scale, 1))
             painter.drawRect(QRectF(cx - sq / 2.0, cy - sq / 2.0, sq, sq))
 
     def _draw_checkbox(self, painter: QPainter, cursor_rect: QRect, is_checked: bool) -> None:
-        """Draw a rounded 14x14 checkbox and vector tick mark at the given cursor rect."""
-        box_size = 14.0
-        box_x = float(cursor_rect.left() + 3)
+        """Draw a rounded checkbox and vector tick mark scaled with ui_scale."""
+        scale = getattr(self, "ui_scale", 1.0)
+        box_size = round(14.0 * scale)
+        box_x = float(cursor_rect.left()) + round(3.0 * scale)
         box_y = float(cursor_rect.top()) + (cursor_rect.height() - box_size) / 2.0
         box_rect = QRectF(box_x, box_y, box_size, box_size)
+        radius = round(3.5 * scale, 1)
 
         if is_checked:
-            painter.setPen(QPen(QColor("#0a84ff"), 1.5))
+            painter.setPen(QPen(QColor("#0a84ff"), max(1.0, round(1.5 * scale, 1))))
             painter.setBrush(QBrush(QColor("#0a84ff")))
-            painter.drawRoundedRect(box_rect, 3.5, 3.5)
+            painter.drawRoundedRect(box_rect, radius, radius)
 
-            check_pen = QPen(QColor("#ffffff"), 1.9)
+            check_pen = QPen(QColor("#ffffff"), max(1.0, round(1.9 * scale, 1)))
             check_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             check_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
             painter.setPen(check_pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
 
             path = QPainterPath()
-            path.moveTo(box_x + 3.2, box_y + 7.2)
-            path.lineTo(box_x + 5.9, box_y + 9.9)
-            path.lineTo(box_x + 10.8, box_y + 4.3)
+            path.moveTo(box_x + 3.2 * scale, box_y + 7.2 * scale)
+            path.lineTo(box_x + 5.9 * scale, box_y + 9.9 * scale)
+            path.lineTo(box_x + 10.8 * scale, box_y + 4.3 * scale)
             painter.drawPath(path)
         else:
-            painter.setPen(QPen(QColor("#787880"), 1.5))
+            painter.setPen(QPen(QColor("#787880"), max(1.0, round(1.5 * scale, 1))))
             painter.setBrush(QBrush(QColor("#262629")))
-            painter.drawRoundedRect(box_rect, 3.5, 3.5)
+            painter.drawRoundedRect(box_rect, radius, radius)
 
     def _checkbox_block_at_pos(self, pos: QPointF) -> Optional[QTextBlock]:
         """Return the QTextBlock if the viewport position is over a painted checkbox."""
@@ -1515,12 +1533,14 @@ class MarkdownEditor(QTextEdit):
         c = QTextCursor(block)
         c.setPosition(block.position() + prefix_len + len(indent))
         rect = self.cursorRect(c)
-        box_x = float(rect.left() + 3)
-        box_y = float(rect.top()) + (rect.height() - 14.0) / 2.0
-        min_x = max(0.0, box_x - 8.0)
-        max_x = box_x + 22.0
-        min_y = box_y - 6.0
-        max_y = box_y + 20.0
+        scale = getattr(self, "ui_scale", 1.0)
+        box_size = round(14.0 * scale)
+        box_x = float(rect.left()) + round(3.0 * scale)
+        box_y = float(rect.top()) + (rect.height() - box_size) / 2.0
+        min_x = max(0.0, box_x - 8.0 * scale)
+        max_x = box_x + box_size + 8.0 * scale
+        min_y = box_y - 6.0 * scale
+        max_y = box_y + box_size + 6.0 * scale
 
         if min_x <= pos.x() <= max_x and min_y <= pos.y() <= max_y:
             return block
@@ -1570,8 +1590,9 @@ class MarkdownEditor(QTextEdit):
             if not (cr.start_block <= active_bn <= cr.end_block):
                 card_rect = self._get_code_card_rect(cr)
                 if card_rect is not None and card_rect.contains(pos):
-                    content_w = get_code_content_width(cr)
-                    gutter_w = get_code_gutter_width(cr) if self.code_line_numbers else 0.0
+                    scale = getattr(self, "ui_scale", 1.0)
+                    content_w = get_code_content_width(cr, ui_scale=scale)
+                    gutter_w = get_code_gutter_width(cr, ui_scale=scale) if self.code_line_numbers else 0.0
                     max_s = max(0.0, content_w - (card_rect.width() - gutter_w))
                     if max_s > 0:
                         return ("code", cr.start_block, max_s)
@@ -1694,13 +1715,14 @@ class MarkdownEditor(QTextEdit):
 
         # Single Tap Actions:
         active_bn = self.highlighter.active_block_number
+        scale = getattr(self, "ui_scale", 1.0)
 
         # 1. Check Copy button
         for cr in self.highlighter.code_regions:
             if not (cr.start_block <= active_bn <= cr.end_block):
                 card_rect = self._get_code_card_rect(cr)
                 if card_rect is not None and card_rect.contains(pos):
-                    btn_rect = get_code_copy_button_rect(card_rect)
+                    btn_rect = get_code_copy_button_rect(card_rect, ui_scale=scale)
                     if btn_rect.contains(pos):
                         code_text = "\n".join(cr.lines)
                         QApplication.clipboard().setText(code_text)
@@ -1714,7 +1736,7 @@ class MarkdownEditor(QTextEdit):
             if not (cr.start_block <= active_bn <= cr.end_block):
                 card_rect = self._get_code_card_rect(cr)
                 if card_rect is not None and card_rect.contains(pos):
-                    edit_btn = get_code_edit_button_rect(card_rect)
+                    edit_btn = get_code_edit_button_rect(card_rect, ui_scale=scale)
                     if edit_btn.contains(pos):
                         target_block = self.document().findBlockByNumber(cr.start_block + 1)
                         if not target_block.isValid():
@@ -1787,13 +1809,14 @@ class MarkdownEditor(QTextEdit):
             return
 
         # Check if hovering over Code Copy button
+        scale = getattr(self, "ui_scale", 1.0)
         old_hovered_copy = self._hovered_copy_btn
         self._hovered_copy_btn = None
         for cr in self.highlighter.code_regions:
             if not (cr.start_block <= active_bn <= cr.end_block):
                 card_rect = self._get_code_card_rect(cr)
                 if card_rect is not None and card_rect.contains(pos):
-                    btn_rect = get_code_copy_button_rect(card_rect)
+                    btn_rect = get_code_copy_button_rect(card_rect, ui_scale=scale)
                     if btn_rect.contains(pos):
                         self._hovered_copy_btn = cr.start_block
                         self.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1813,7 +1836,7 @@ class MarkdownEditor(QTextEdit):
             if not (cr.start_block <= active_bn <= cr.end_block):
                 card_rect = self._get_code_card_rect(cr)
                 if card_rect is not None and card_rect.contains(pos):
-                    edit_btn = get_code_edit_button_rect(card_rect)
+                    edit_btn = get_code_edit_button_rect(card_rect, ui_scale=scale)
                     if edit_btn.contains(pos):
                         self._hovered_edit_btn = cr.start_block
                         self.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1843,10 +1866,10 @@ class MarkdownEditor(QTextEdit):
             if not (cr.start_block <= active_bn <= cr.end_block):
                 card_rect = self._get_code_card_rect(cr)
                 if card_rect is not None and card_rect.contains(pos):
-                    content_w = get_code_content_width(cr)
+                    content_w = get_code_content_width(cr, ui_scale=scale)
                     cur_s = self._code_scroll_x.get(cr.start_block, 0.0)
-                    gutter_w = get_code_gutter_width(cr) if self.code_line_numbers else 0.0
-                    sb = get_code_scrollbar_geometry(card_rect, content_w, cur_s, gutter_width=gutter_w)
+                    gutter_w = get_code_gutter_width(cr, ui_scale=scale) if self.code_line_numbers else 0.0
+                    sb = get_code_scrollbar_geometry(card_rect, content_w, cur_s, gutter_width=gutter_w, ui_scale=scale)
                     if sb is not None and sb[0].contains(pos):
                         self.viewport().setCursor(Qt.CursorShape.ArrowCursor)
                         QToolTip.hideText()
@@ -1904,11 +1927,12 @@ class MarkdownEditor(QTextEdit):
                     return
 
             # 1. Click on Code Card Copy button
+            scale = getattr(self, "ui_scale", 1.0)
             for cr in self.highlighter.code_regions:
                 if not (cr.start_block <= active_bn <= cr.end_block):
                     card_rect = self._get_code_card_rect(cr)
                     if card_rect is not None and card_rect.contains(pos):
-                        btn_rect = get_code_copy_button_rect(card_rect)
+                        btn_rect = get_code_copy_button_rect(card_rect, ui_scale=scale)
                         if btn_rect.contains(pos):
                             code_text = "\n".join(cr.lines)
                             QApplication.clipboard().setText(code_text)
@@ -1922,7 +1946,7 @@ class MarkdownEditor(QTextEdit):
                 if not (cr.start_block <= active_bn <= cr.end_block):
                     card_rect = self._get_code_card_rect(cr)
                     if card_rect is not None and card_rect.contains(pos):
-                        edit_btn = get_code_edit_button_rect(card_rect)
+                        edit_btn = get_code_edit_button_rect(card_rect, ui_scale=scale)
                         if edit_btn.contains(pos):
                             target_block = self.document().findBlockByNumber(cr.start_block + 1)
                             if not target_block.isValid():
@@ -1940,10 +1964,10 @@ class MarkdownEditor(QTextEdit):
                 if not (cr.start_block <= active_bn <= cr.end_block):
                     card_rect = self._get_code_card_rect(cr)
                     if card_rect is not None:
-                        content_w = get_code_content_width(cr)
+                        content_w = get_code_content_width(cr, ui_scale=scale)
                         cur_s = self._code_scroll_x.get(cr.start_block, 0.0)
-                        gutter_w = get_code_gutter_width(cr) if self.code_line_numbers else 0.0
-                        sb = get_code_scrollbar_geometry(card_rect, content_w, cur_s, gutter_width=gutter_w)
+                        gutter_w = get_code_gutter_width(cr, ui_scale=scale) if self.code_line_numbers else 0.0
+                        sb = get_code_scrollbar_geometry(card_rect, content_w, cur_s, gutter_width=gutter_w, ui_scale=scale)
                         if sb is not None:
                             track_r, thumb_r, max_s = sb
                             if track_r.contains(pos):
@@ -2066,13 +2090,14 @@ class MarkdownEditor(QTextEdit):
                         return
 
             # 2. Check if hovering over an inactive code card
+            scale = getattr(self, "ui_scale", 1.0)
             for cr in self.highlighter.code_regions:
                 if cr.start_block <= active_bn <= cr.end_block:
                     continue
                 card_rect = self._get_code_card_rect(cr)
                 if card_rect is not None and card_rect.contains(pos):
-                    content_w = get_code_content_width(cr)
-                    gutter_w = get_code_gutter_width(cr) if self.code_line_numbers else 0.0
+                    content_w = get_code_content_width(cr, ui_scale=scale)
+                    gutter_w = get_code_gutter_width(cr, ui_scale=scale) if self.code_line_numbers else 0.0
                     max_s = max(0.0, content_w - (card_rect.width() - gutter_w))
                     if max_s > 0:
                         cur_s = self._code_scroll_x.get(cr.start_block, 0.0)
@@ -3131,10 +3156,15 @@ class EditorPanel(QWidget):
         """Request UI zoom reset."""
         self.zoom_reset_requested.emit()
 
+    def set_ui_scale(self, scale: float) -> None:
+        """Propagate UI scale to markdown editor."""
+        self.editor.set_ui_scale(scale)
+
     def apply_config(self, config: Any, ui_scale: float = 1.0) -> None:
         """Apply live configuration settings to the editor canvas with optional UI scaling."""
         if hasattr(config, "general") and hasattr(config.general, "ui_scale"):
             ui_scale = getattr(config.general, "ui_scale", 1.0)
+        self.editor.set_ui_scale(ui_scale)
 
         if hasattr(config, "editor"):
             self._save_timer.setInterval(config.editor.auto_save_delay_ms)

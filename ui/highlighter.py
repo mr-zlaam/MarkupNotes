@@ -81,8 +81,26 @@ class MarkdownHighlighter(QSyntaxHighlighter):
         self.mermaid_regions: List[MermaidRegion] = []
         self.code_regions: List[CodeRegion] = []
         self._block_modes: Dict[int, Tuple[str, int]] = {}
-        self.ui_scale: float = 1.0
+        self._ui_scale: float = 1.0
         self._init_formats()
+
+    @property
+    def ui_scale(self) -> float:
+        return self._ui_scale
+
+    @ui_scale.setter
+    def ui_scale(self, value: float) -> None:
+        self.set_ui_scale(value)
+
+    def set_ui_scale(self, scale: float) -> None:
+        """Update scale factor and refresh letter spacing and formats accordingly."""
+        self._ui_scale = float(scale)
+        if hasattr(self, "bullet_hide_format"):
+            self.bullet_hide_format.setFontLetterSpacing(round(10.0 * self._ui_scale, 1))
+        if hasattr(self, "ordered_list_space_format"):
+            self.ordered_list_space_format.setFontLetterSpacing(round(14.0 * self._ui_scale, 1))
+        if hasattr(self, "checkbox_x_format"):
+            self._update_checkbox_x_format()
 
     def _init_formats(self) -> None:
         # Format used to collapse and hide markdown syntax markers on inactive lines
@@ -281,19 +299,20 @@ class MarkdownHighlighter(QSyntaxHighlighter):
                     new_modes[b] = ("inactive_mermaid", pt_size)
 
         # 4. Code Blocks (```lang ... ```)
+        scale = getattr(self, "_ui_scale", 1.0)
+        fence_pt = max(10, int(round(16 * scale)))
+        body_pt = max(8, int(round(14 * scale)))
         for cr in self.code_regions:
             active_in_code = cr.start_block <= self.active_block_number <= cr.end_block
             if active_in_code:
                 for b in range(cr.start_block, cr.end_block + 1):
-                    new_modes[b] = ("active_code", 14)
+                    new_modes[b] = ("active_code", body_pt)
             else:
-                # Opening & closing fences absorb header (28px) and top/bottom padding (24px)
-                # Fences at pt 14 = 26px each (26 + 26 = 52px = 28 + 8 + 16)
-                # Body code lines at pt 12 = 22px each (matching line_h = 22.0)
-                new_modes[cr.start_block] = ("inactive_code", 16)
+                # Opening & closing fences absorb header (28px * scale) and top/bottom padding (24px * scale)
+                new_modes[cr.start_block] = ("inactive_code", fence_pt)
                 for b in range(cr.start_block + 1, cr.end_block):
-                    new_modes[b] = ("inactive_code", 14)
-                new_modes[cr.end_block] = ("inactive_code", 16)
+                    new_modes[b] = ("inactive_code", body_pt)
+                new_modes[cr.end_block] = ("inactive_code", fence_pt)
 
         self._block_modes = new_modes
         changed_blocks: Set[int] = set()
