@@ -1893,7 +1893,7 @@ class MarkdownEditor(QTextEdit):
             self.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
             QToolTip.showText(
                 event.globalPosition().toPoint(),
-                f"Ctrl+Click or Ctrl+Enter to open {url}",
+                f"Ctrl+Click to open {url}",
                 self.viewport(),
             )
             return
@@ -2492,17 +2492,11 @@ class MarkdownEditor(QTextEdit):
                     self.viewport().update()
                     return
 
-        # 2. Ctrl+Enter: If on a link, open in browser. Otherwise toggle or create checkbox.
+        # 2. Ctrl+Enter: Toggle or create checkbox
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier and event.key() in (
             Qt.Key.Key_Return,
             Qt.Key.Key_Enter,
         ):
-            link_info = find_link_at_offset(line_text, pos_in_block)
-            if link_info is not None:
-                _, _, url = link_info
-                self._open_url(url)
-                return
-
             if is_checkbox_line(line_text):
                 self._toggle_checkbox_at_block(block)
             else:

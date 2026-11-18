@@ -216,6 +216,37 @@ class TestLinkDialogAndHeaderOpen(unittest.TestCase):
         self.assertEqual(f.format.foreground().color().name(), "#0a84ff")
         editor.deleteLater()
 
+    def test_ctrl_enter_does_not_open_link_and_toggles_checkbox(self) -> None:
+        """Verify pressing Ctrl+Enter on a link creates/toggles a checkbox instead of opening browser."""
+        from PyQt6.QtGui import QKeyEvent
+
+        editor = MarkdownEditor()
+        editor.resize(600, 300)
+        editor.show()
+        text = "Go on https://blacksky.norvexiq.com and check"
+        editor.setPlainText(text)
+
+        # Position cursor on the URL
+        cursor = editor.textCursor()
+        cursor.setPosition(15)  # Inside the URL
+        editor.setTextCursor(cursor)
+
+        with patch.object(editor, "_open_url") as mock_open:
+            key_event = QKeyEvent(
+                QKeyEvent.Type.KeyPress,
+                Qt.Key.Key_Return,
+                Qt.KeyboardModifier.ControlModifier,
+                "\n",
+            )
+            editor.keyPressEvent(key_event)
+
+            # _open_url must NOT be called
+            mock_open.assert_not_called()
+
+        # The line must be converted to a checkbox item instead
+        self.assertTrue(editor.toPlainText().startswith("- [ ] "))
+        editor.deleteLater()
+
 
 if __name__ == "__main__":
     unittest.main()
