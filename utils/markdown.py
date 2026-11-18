@@ -6,7 +6,7 @@ from typing import Optional, Tuple
 CHECKBOX_PATTERN = re.compile(r"^(\s*)([-*+]\s*\[([ xX]?)\]\s?)(.*)$")
 LIST_PATTERN = re.compile(r"^(\s*)([-*+]|\d+\.|\d+\))(\s+)(.*)$")
 LINK_PATTERN = re.compile(
-    r"\[(?P<label>[^\]]+)\]\((?P<url>[^\s)]+)\)|<(?P<autourl>https?://[^\s>]+)>|(?P<rawurl>https?://[^\s<>\)\]]+)"
+    r"\[(?P<label>[^\]]+)\]\((?P<url>[^\s)]+)\)|<(?P<autourl>https?://[^\s>]+)>|(?P<rawurl>https?://[^\s<>\)\]`]+)"
 )
 
 
@@ -14,8 +14,14 @@ def find_link_at_offset(text: str, offset: int) -> Optional[Tuple[int, int, str]
     """Return (start, end, url) if offset falls within a Markdown link or URL in text."""
     for m in LINK_PATTERN.finditer(text):
         start, end = m.span()
+        if m.group("rawurl"):
+            raw = m.group("rawurl")
+            trimmed = raw.rstrip(".,;:!?*~'\"")
+            end = start + len(trimmed)
+            url = trimmed
+        else:
+            url = m.group("url") or m.group("autourl")
         if start <= offset <= end:
-            url = m.group("url") or m.group("autourl") or m.group("rawurl")
             return start, end, url
     return None
 

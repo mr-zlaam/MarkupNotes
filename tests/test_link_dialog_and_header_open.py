@@ -151,6 +151,71 @@ class TestLinkDialogAndHeaderOpen(unittest.TestCase):
         self.assertEqual(editor.toPlainText(), "Unchanged text here")
         editor.deleteLater()
 
+    def test_raw_url_highlighting_and_punctuation_handling(self) -> None:
+        """Verify raw URLs are highlighted with link format while trailing sentence punctuation is excluded."""
+        from ui.highlighter import MarkdownHighlighter
+        from utils.markdown import find_link_at_offset
+
+        editor = MarkdownEditor()
+        editor.resize(600, 300)
+        editor.show()
+        text = "Visit https://example.com/test. Thanks!"
+        editor.setPlainText(text)
+
+        blk = editor.document().firstBlock()
+        formats = blk.layout().formats()
+        link_formats = [f for f in formats if f.format.fontUnderline()]
+        self.assertEqual(len(link_formats), 1)
+
+        f = link_formats[0]
+        formatted_text = text[f.start : f.start + f.length]
+        self.assertEqual(formatted_text, "https://example.com/test")
+        self.assertEqual(f.format.foreground().color().name(), "#0a84ff")
+        self.assertTrue(f.format.fontUnderline())
+
+        # Test link offset detection (period at offset 31 should not be part of the link)
+        link_info = find_link_at_offset(text, 10)
+        self.assertIsNotNone(link_info)
+        start, end, url = link_info
+        self.assertEqual(url, "https://example.com/test")
+        self.assertEqual(text[start:end], "https://example.com/test")
+
+        # Offset over trailing period
+        self.assertIsNone(find_link_at_offset(text, 32))
+        editor.deleteLater()
+
+    def test_raw_url_in_inline_code_not_highlighted_as_link(self) -> None:
+        """Verify raw URLs inside inline code blocks are not styled with link format."""
+        editor = MarkdownEditor()
+        editor.resize(600, 300)
+        editor.show()
+        text = "Code `https://code.example.com` is code."
+        editor.setPlainText(text)
+
+        blk = editor.document().firstBlock()
+        formats = blk.layout().formats()
+        underlined_formats = [f for f in formats if f.format.fontUnderline()]
+        self.assertEqual(len(underlined_formats), 0)
+        editor.deleteLater()
+
+    def test_autolink_highlighting(self) -> None:
+        """Verify autolinks <https://...> have their URL highlighted with link format."""
+        editor = MarkdownEditor()
+        editor.resize(600, 300)
+        editor.show()
+        text = "Check <https://autolink.org> out"
+        editor.setPlainText(text)
+
+        blk = editor.document().firstBlock()
+        formats = blk.layout().formats()
+        link_formats = [f for f in formats if f.format.fontUnderline()]
+        self.assertEqual(len(link_formats), 1)
+
+        f = link_formats[0]
+        self.assertEqual(text[f.start : f.start + f.length], "https://autolink.org")
+        self.assertEqual(f.format.foreground().color().name(), "#0a84ff")
+        editor.deleteLater()
+
 
 if __name__ == "__main__":
     unittest.main()

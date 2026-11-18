@@ -1533,9 +1533,10 @@ class MarkdownEditor(QTextEdit):
                 return s_blk, e_blk, r
         return None
 
-    def _link_at_pos(self, pos: QPointF) -> Optional[tuple[int, int, str]]:
+    def _link_at_pos(self, pos: QPointF | QPoint) -> Optional[tuple[int, int, str]]:
         """Return (start, end, url) if viewport position is over a Markdown link."""
-        cursor = self.cursorForPosition(pos.toPoint())
+        pt = pos.toPoint() if hasattr(pos, "toPoint") else pos
+        cursor = self.cursorForPosition(pt)
         block = cursor.block()
         if not block.isValid():
             return None

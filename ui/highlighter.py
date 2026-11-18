@@ -50,7 +50,9 @@ BOLD_RE = re.compile(r"(\*\*|__)(.+?)\1")
 ITALIC_RE = re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)")
 INLINE_CODE_RE = re.compile(r"(`)([^`\n]+)\1")
 STRIKE_RE = re.compile(r"(~{1,2})([^~\n]+?)\1")
-LINK_RE = re.compile(r"(\[)([^\]]+)(\]\([^)]+\))")
+LINK_RE = re.compile(
+    r"(\[)([^\]]+)(\]\([^\s)]+\))|(<)((?:https?|ftp)://[^\s>]+)(>)|((?:https?|ftp)://[^\s<>\)\]`]+)"
+)
 TAG_RE = re.compile(r"(?:^|(?<=\s))(#[\w\d_-]+)")
 HTML_U_RE = re.compile(r"(<u>)(.+?)(</u>)", re.IGNORECASE)
 HTML_MARK_RE = re.compile(r"(<mark>)(.+?)(</mark>)", re.IGNORECASE)
@@ -659,41 +661,105 @@ class MarkdownHighlighter(QSyntaxHighlighter):
                 self._format(text, g1_s, g1_e - g1_s, syn_fmt)
                 self._format(text, g3_s, g3_e - g3_s, syn_fmt)
 
-        # Links: [text](url)
-        if "[" in text:
-            for m in LINK_RE.finditer(text):
-                g1_start, g1_end = m.span(1)
-                g2_start, g2_end = m.span(2)
-                g3_start, g3_end = m.span(3)
-                fmt = QTextCharFormat(self.link_format)
-                if base_point_size:
-                    fmt.setFontPointSize(base_point_size)
-                if is_checked:
-                    fmt.setForeground(dim_color)
-                if base_bold:
-                    fmt.setFontWeight(QFont.Weight.Bold)
-                else:
-                    # Check if entire link is wrapped in bold (**[link](url)**)
-                    for bm in BOLD_RE.finditer(text):
-                        if bm.start() <= g1_start and g3_end <= bm.end():
-                            fmt.setFontWeight(QFont.Weight.Bold)
-                            break
-                self._format(text, g2_start, g2_end - g2_start, fmt)
+        # Links: [text](url), <url>, and raw https:// urls
+        if "[" in text or "http://" in text or "https://" in text or "ftp://" in text:
+            code_spans: Optional[List[tuple[int, int]]] = None
+            math_spans: Optional[List[tuple[int, int]]] = None
 
-                # Check if inner text has bold formatting ([**bold**](url))
-                inner_link_text = m.group(2)
-                if "**" in inner_link_text or "__" in inner_link_text:
-                    for im in BOLD_RE.finditer(inner_link_text):
-                        im_s = g2_start + im.start() + len(im.group(1))
-                        im_len = (im.end() - im.start()) - 2 * len(im.group(1))
-                        b_fmt = QTextCharFormat(fmt)
-                        b_fmt.setFontWeight(QFont.Weight.Bold)
-                        if is_checked:
-                            b_fmt.setForeground(dim_color)
-                        self._format(text, im_s, im_len, b_fmt)
-                syntax_fmt = self.marker_format if is_active else self.hidden_format
-                self._format(text, g1_start, g1_end - g1_start, syntax_fmt)
-                self._format(text, g3_start, g3_end - g3_start, syntax_fmt)
+            for m in LINK_RE.finditer(text):
+                m_start, m_end = m.span()
+
+                # Skip if link is inside inline code or inline math
+                if "`" in text:
+                    if code_spans is None:
+                        code_spans = [cm.span() for cm in INLINE_CODE_RE.finditer(text)]
+                    if any(cs <= m_start and m_end <= ce for cs, ce in code_spans):
+                        continue
+                if "$" in text or "\\" in text:
+                    if math_spans is None:
+                        math_spans = [mm.span() for mm in INLINE_MATH_RE.finditer(text)]
+                    if any(ms <= m_start and m_end <= me for ms, me in math_spans):
+                        continue
+
+                if m.group(1):
+                    # Markdown link: [text](url)
+                    g1_start, g1_end = m.span(1)
+                    g2_start, g2_end = m.span(2)
+                    g3_start, g3_end = m.span(3)
+                    fmt = QTextCharFormat(self.link_format)
+                    if base_point_size:
+                        fmt.setFontPointSize(base_point_size)
+                    if is_checked:
+                        fmt.setForeground(dim_color)
+                    if base_bold:
+                        fmt.setFontWeight(QFont.Weight.Bold)
+                    else:
+                        # Check if entire link is wrapped in bold (**[link](url)**)
+                        for bm in BOLD_RE.finditer(text):
+                            if bm.start() <= g1_start and g3_end <= bm.end():
+                                fmt.setFontWeight(QFont.Weight.Bold)
+                                break
+                    self._format(text, g2_start, g2_end - g2_start, fmt)
+
+                    # Check if inner text has bold formatting ([**bold**](url))
+                    inner_link_text = m.group(2)
+                    if "**" in inner_link_text or "__" in inner_link_text:
+                        for im in BOLD_RE.finditer(inner_link_text):
+                            im_s = g2_start + im.start() + len(im.group(1))
+                            im_len = (im.end() - im.start()) - 2 * len(im.group(1))
+                            b_fmt = QTextCharFormat(fmt)
+                            b_fmt.setFontWeight(QFont.Weight.Bold)
+                            if is_checked:
+                                b_fmt.setForeground(dim_color)
+                            self._format(text, im_s, im_len, b_fmt)
+                    syntax_fmt = self.marker_format if is_active else self.hidden_format
+                    self._format(text, g1_start, g1_end - g1_start, syntax_fmt)
+                    self._format(text, g3_start, g3_end - g3_start, syntax_fmt)
+
+                elif m.group(4):
+                    # Autolink: <https://url>
+                    g4_start, g4_end = m.span(4)
+                    g5_start, g5_end = m.span(5)
+                    g6_start, g6_end = m.span(6)
+                    fmt = QTextCharFormat(self.link_format)
+                    if base_point_size:
+                        fmt.setFontPointSize(base_point_size)
+                    if is_checked:
+                        fmt.setForeground(dim_color)
+                    if base_bold:
+                        fmt.setFontWeight(QFont.Weight.Bold)
+                    self._format(text, g5_start, g5_end - g5_start, fmt)
+
+                    syntax_fmt = self.marker_format if is_active else self.hidden_format
+                    self._format(text, g4_start, g4_end - g4_start, syntax_fmt)
+                    self._format(text, g6_start, g6_end - g6_start, syntax_fmt)
+
+                elif m.group(7):
+                    # Raw URL: https://example.com
+                    raw = m.group(7)
+                    clean_raw = raw.rstrip(".,;:!?*~'\"")
+                    if not clean_raw:
+                        continue
+                    raw_start = m.start(7)
+                    raw_len = len(clean_raw)
+                    fmt = QTextCharFormat(self.link_format)
+                    if base_point_size:
+                        fmt.setFontPointSize(base_point_size)
+                    if is_checked:
+                        fmt.setForeground(dim_color)
+                    if base_bold:
+                        fmt.setFontWeight(QFont.Weight.Bold)
+                    elif "*" in text or "_" in text:
+                        for bm in BOLD_RE.finditer(text):
+                            if bm.start() <= raw_start and raw_start + raw_len <= bm.end():
+                                fmt.setFontWeight(QFont.Weight.Bold)
+                                break
+                    if "*" in text or "_" in text:
+                        for im in ITALIC_RE.finditer(text):
+                            if im.start() <= raw_start and raw_start + raw_len <= im.end():
+                                fmt.setFontItalic(True)
+                                break
+                    self._format(text, raw_start, raw_len, fmt)
 
         # Tags: #tag (not headings)
         if "#" in text and not base_point_size:
