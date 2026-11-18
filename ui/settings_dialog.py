@@ -59,6 +59,7 @@ from utils.icons import (
     create_type_icon,
 )
 from utils.paths import get_config_dir, get_default_notes_dir
+from ui.theme import TOOLTIP_QSS
 
 
 class ToggleSwitch(QAbstractButton):
@@ -285,6 +286,13 @@ class ModernSettingsDialog(QDialog):
             self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
             self.setFixedSize(860, 620)
 
+        self.setStyleSheet(f"""
+            QDialog {{
+                background-color: transparent;
+            }}
+            {TOOLTIP_QSS}
+        """)
+
         self._init_ui()
 
     def _update_card_geometry(self) -> None:
@@ -305,12 +313,13 @@ class ModernSettingsDialog(QDialog):
         self.card.setObjectName("SettingsCard")
         self.card.setFixedSize(860, 620)
         self._update_card_geometry()
-        self.card.setStyleSheet("""
-            QFrame#SettingsCard {
+        self.card.setStyleSheet(f"""
+            QFrame#SettingsCard {{
                 background-color: #1a1a1e;
                 border: 1px solid #383842;
                 border-radius: 14px;
-            }
+            }}
+            {TOOLTIP_QSS}
         """)
 
         shadow = QGraphicsDropShadowEffect(self.card)
@@ -378,15 +387,16 @@ class ModernSettingsDialog(QDialog):
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         close_btn.setToolTip("Close (Esc or Space)")
         close_btn.clicked.connect(self.accept)
-        close_btn.setStyleSheet("""
-            QPushButton {
+        close_btn.setStyleSheet(f"""
+            QPushButton {{
                 background-color: #242428;
                 border: 1px solid #383840;
                 border-radius: 6px;
-            }
-            QPushButton:hover {
+            }}
+            QPushButton:hover {{
                 background-color: #303038;
-            }
+            }}
+            {TOOLTIP_QSS}
         """)
         header_layout.addWidget(close_btn)
         card_layout.addLayout(header_layout)

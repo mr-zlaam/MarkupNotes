@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import List, Optional, Union
 
 from PyQt6.QtCore import QEasingCurve, QFileSystemWatcher, QTimer, QVariantAnimation, Qt
-from PyQt6.QtGui import QCloseEvent, QIcon, QKeySequence, QShortcut
+from PyQt6.QtGui import QCloseEvent, QIcon, QKeyEvent, QKeySequence, QShortcut
 from PyQt6.QtWidgets import QApplication, QMainWindow, QMessageBox, QSplitter, QWidget
 
 from core.config import ConfigManager
@@ -64,6 +64,7 @@ class MainWindow(QMainWindow):
         self._all_current_notes: List[Note] = []
         self._is_saving_internally: bool = False
         self._active_pane_anim: Optional[QVariantAnimation] = None
+        self._registered_shortcuts: List[QShortcut] = []
 
         # File system watcher for external edits
         self.watcher = QFileSystemWatcher(parent=self)
@@ -139,7 +140,6 @@ class MainWindow(QMainWindow):
 
         self.splitter.setSizes([folders_w, notes_w, editor_w, 0])
         self.splitter.splitterMoved.connect(self._on_splitter_moved)
-        self._setup_shortcuts()
         self._apply_ui_scale(self.config.general.ui_scale)
         self._update_panel_buttons()
 
@@ -215,22 +215,65 @@ class MainWindow(QMainWindow):
         f1_sc.activated.connect(self._show_shortcuts_cheatsheet)
 
         # Dedicated Settings Dialog (Ctrl+,)
-        settings_sc = QShortcut(QKeySequence("Ctrl+,"), self)
-        settings_sc.activated.connect(self._show_settings_dialog)
+        for seq in ("Ctrl+,", "Ctrl+<"):
+            settings_sc = QShortcut(QKeySequence(seq), self)
+            settings_sc.setContext(Qt.ShortcutContext.WindowShortcut)
+            settings_sc.activated.connect(self._show_settings_dialog)
+            self._registered_shortcuts.append(settings_sc)
 
-        # Zoom In (Ctrl++ and Ctrl+=)
-        zoom_in_sc = QShortcut(QKeySequence("Ctrl++"), self)
-        zoom_in_sc.activated.connect(self._on_zoom_in)
-        zoom_in_eq_sc = QShortcut(QKeySequence("Ctrl+="), self)
-        zoom_in_eq_sc.activated.connect(self._on_zoom_in)
+        # Zoom In (Ctrl++, Ctrl+=, Ctrl+Shift+=)
+        for seq in ("Ctrl++", "Ctrl+=", "Ctrl+Shift+=", "Ctrl+Shift++"):
+            zoom_in_sc = QShortcut(QKeySequence(seq), self)
+            zoom_in_sc.setContext(Qt.ShortcutContext.WindowShortcut)
+            zoom_in_sc.activated.connect(self._on_zoom_in)
+            self._registered_shortcuts.append(zoom_in_sc)
 
-        # Zoom Out (Ctrl+-)
-        zoom_out_sc = QShortcut(QKeySequence("Ctrl+-"), self)
-        zoom_out_sc.activated.connect(self._on_zoom_out)
+        # Zoom Out (Ctrl+-, Ctrl+_, Ctrl+Shift+-)
+        for seq in ("Ctrl+-", "Ctrl+_", "Ctrl+Shift+-"):
+            zoom_out_sc = QShortcut(QKeySequence(seq), self)
+            zoom_out_sc.setContext(Qt.ShortcutContext.WindowShortcut)
+            zoom_out_sc.activated.connect(self._on_zoom_out)
+            self._registered_shortcuts.append(zoom_out_sc)
 
-        # Reset Zoom (Ctrl+0)
-        zoom_reset_sc = QShortcut(QKeySequence("Ctrl+0"), self)
-        zoom_reset_sc.activated.connect(self._on_zoom_reset)
+        # Reset Zoom (Ctrl+0, Ctrl+))
+        for seq in ("Ctrl+0", "Ctrl+)"):
+            zoom_reset_sc = QShortcut(QKeySequence(seq), self)
+            zoom_reset_sc.setContext(Qt.ShortcutContext.WindowShortcut)
+            zoom_reset_sc.activated.connect(self._on_zoom_reset)
+            self._registered_shortcuts.append(zoom_reset_sc)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        """Handle window-level keyboard navigation and shortcuts."""
+        mods = event.modifiers()
+        has_ctrl = bool(mods & Qt.KeyboardModifier.ControlModifier)
+        has_alt = bool(mods & Qt.KeyboardModifier.AltModifier)
+
+        if has_ctrl and not has_alt:
+            # Ctrl+, opens Settings modal
+            if event.key() in (Qt.Key.Key_Comma, Qt.Key.Key_Less) or event.text() in (",", "<"):
+                self._show_settings_dialog()
+                event.accept()
+                return
+
+            # Zoom In (Ctrl++ or Ctrl+= or Ctrl+Shift+=)
+            if event.key() in (Qt.Key.Key_Plus, Qt.Key.Key_Equal) or event.text() in ("+", "="):
+                self._on_zoom_in()
+                event.accept()
+                return
+
+            # Zoom Out (Ctrl+- or Ctrl+_)
+            if event.key() in (Qt.Key.Key_Minus, Qt.Key.Key_Underscore) or event.text() in ("-", "_"):
+                self._on_zoom_out()
+                event.accept()
+                return
+
+            # Reset Zoom (Ctrl+0)
+            if event.key() == Qt.Key.Key_0 or event.text() == "0":
+                self._on_zoom_reset()
+                event.accept()
+                return
+
+        super().keyPressEvent(event)
 
     def _apply_ui_scale(self, scale: float) -> None:
         """Apply full interface zoom scale across all panels, editors, and dialogs."""

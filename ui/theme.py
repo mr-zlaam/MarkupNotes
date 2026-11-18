@@ -280,11 +280,57 @@ QFileDialog QPushButton:hover {
 }
 """
 
+TOOLTIP_QSS = """
+QToolTip {
+    background-color: #202024;
+    color: #e2e2e6;
+    border: 1px solid #36363c;
+    border-radius: 6px;
+    padding: 5px 9px;
+    font-size: 11px;
+    font-weight: 500;
+}
+"""
+
 
 def apply_theme(app, ui_scale: float = 1.0) -> None:
     """Apply the application-wide dark styling and ensure assets with optional UI scaling."""
+    from PyQt6.QtGui import QColor, QFont, QPalette
+    from PyQt6.QtWidgets import QStyleFactory, QToolTip
     from utils.cursors import install_global_button_cursor_filter
     from utils.icons import ensure_chevron_assets
+
+    if app is None:
+        return
+
+    # Ensure clean cross-platform Fusion base style so Linux desktop plugins
+    # (e.g. qt6ct, GTK) cannot force yellow system palettes (#ffffdc) on tooltips.
+    if hasattr(app, "style") and app.style() is not None:
+        if app.style().objectName().lower() != "fusion":
+            fusion_style = QStyleFactory.create("Fusion")
+            if fusion_style is not None:
+                app.setStyle(fusion_style)
+
+    # Set custom dark tooltip palette on both QToolTip and QApplication
+    tip_pal = QToolTip.palette()
+    tip_pal.setColor(QPalette.ColorRole.ToolTipBase, QColor("#202024"))
+    tip_pal.setColor(QPalette.ColorRole.ToolTipText, QColor("#e2e2e6"))
+    tip_pal.setColor(QPalette.ColorRole.Window, QColor("#202024"))
+    tip_pal.setColor(QPalette.ColorRole.WindowText, QColor("#e2e2e6"))
+    tip_pal.setColor(QPalette.ColorRole.Base, QColor("#202024"))
+    tip_pal.setColor(QPalette.ColorRole.Text, QColor("#e2e2e6"))
+    QToolTip.setPalette(tip_pal)
+
+    app_pal = app.palette()
+    app_pal.setColor(QPalette.ColorRole.ToolTipBase, QColor("#202024"))
+    app_pal.setColor(QPalette.ColorRole.ToolTipText, QColor("#e2e2e6"))
+    app_pal.setColor(QPalette.ColorRole.Window, QColor("#1e1e1e"))
+    app_pal.setColor(QPalette.ColorRole.WindowText, QColor("#e0e0e0"))
+    app.setPalette(app_pal)
+
+    tip_font = QToolTip.font()
+    tip_font.setPointSize(max(8, int(round(10 * ui_scale))))
+    QToolTip.setFont(tip_font)
 
     install_global_button_cursor_filter(app)
 

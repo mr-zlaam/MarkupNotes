@@ -76,6 +76,7 @@ class FolderSidebar(QWidget):
         icon_dim = max(14, int(round(18 * scale)))
         self.tree_widget.setIconSize(QSize(icon_dim, icon_dim))
         self.tree_widget.setIndentation(max(12, int(round(16 * scale))))
+        self.tree_widget.doItemsLayout()
         self.tree_widget.viewport().update()
 
     @property

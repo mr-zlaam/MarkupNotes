@@ -31,6 +31,7 @@ from utils.icons import (
     create_markdown_icon,
     create_trash_icon,
 )
+from ui.theme import TOOLTIP_QSS
 
 
 class ModernInputDialog(QDialog):
@@ -108,7 +109,7 @@ class ModernInputDialog(QDialog):
                 background-color: #383840;
                 color: #ffffff;
             }
-        """)
+        """ + TOOLTIP_QSS)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 22, 24, 20)
@@ -296,7 +297,7 @@ class ModernLinkDialog(QDialog):
                 background-color: #383840;
                 color: #ffffff;
             }
-        """)
+        """ + TOOLTIP_QSS)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 22, 24, 20)
@@ -474,7 +475,7 @@ class ModernConfirmDialog(QDialog):
                 background-color: #383840;
                 color: #ffffff;
             }}
-        """)
+        """ + TOOLTIP_QSS)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 22, 24, 20)
@@ -792,7 +793,7 @@ class ModernMessageDialog(QDialog):
                 background-color: #383840;
                 color: #ffffff;
             }
-        """)
+        """ + TOOLTIP_QSS)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 22, 24, 20)
@@ -1031,7 +1032,7 @@ class ModernExportDialog(QDialog):
                 background-color: #383840;
                 color: #ffffff;
             }
-        """)
+        """ + TOOLTIP_QSS)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 22, 24, 20)

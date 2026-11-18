@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
 )
 
 from utils.icons import create_badge_pixmap, create_diff_icon
+from ui.theme import TOOLTIP_QSS
 
 
 class ModernDiffDialog(QDialog):
@@ -103,7 +104,7 @@ class ModernDiffDialog(QDialog):
                 background-color: #4a262c;
                 color: #ff8580;
             }
-        """)
+        """ + TOOLTIP_QSS)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 18, 20, 18)

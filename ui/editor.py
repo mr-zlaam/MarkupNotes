@@ -132,6 +132,18 @@ class NoteTitleEdit(QLineEdit):
         """)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
+        mods = event.modifiers()
+        if bool(mods & Qt.KeyboardModifier.ControlModifier) and not bool(mods & Qt.KeyboardModifier.AltModifier):
+            if event.key() in (
+                Qt.Key.Key_Comma,
+                Qt.Key.Key_Plus,
+                Qt.Key.Key_Equal,
+                Qt.Key.Key_Minus,
+                Qt.Key.Key_Underscore,
+                Qt.Key.Key_0,
+            ):
+                event.ignore()
+                return
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             self.enter_pressed.emit()
             event.accept()
@@ -149,6 +161,7 @@ class MarkdownEditor(QTextEdit):
     up_at_top_requested = pyqtSignal()
     find_requested = pyqtSignal(bool)  # is_replace_mode
     find_close_requested = pyqtSignal()
+    settings_requested = pyqtSignal()
     zoom_in_requested = pyqtSignal()
     zoom_out_requested = pyqtSignal()
     zoom_reset_requested = pyqtSignal()
@@ -2181,6 +2194,12 @@ class MarkdownEditor(QTextEdit):
                 event.accept()
                 return
 
+            # Ctrl+, opens settings modal
+            if event.key() in (Qt.Key.Key_Comma, Qt.Key.Key_Less) or event.text() in (",", "<"):
+                self.settings_requested.emit()
+                event.accept()
+                return
+
             # Ctrl+/ or Ctrl+? opens shortcuts modal
             if event.key() in (Qt.Key.Key_Slash, Qt.Key.Key_Question) or event.text() in ("/", "?"):
                 self._show_shortcuts_dialog()
@@ -2742,6 +2761,7 @@ class EditorPanel(QWidget):
         self.editor = MarkdownEditor(parent=self)
         self.editor.textChanged.connect(self._on_text_changed)
         self.editor.up_at_top_requested.connect(self._on_up_at_top)
+        self.editor.settings_requested.connect(self.settings_requested.emit)
         self.editor.zoom_in_requested.connect(self.zoom_in_requested.emit)
         self.editor.zoom_out_requested.connect(self.zoom_out_requested.emit)
         self.editor.zoom_reset_requested.connect(self.zoom_reset_requested.emit)

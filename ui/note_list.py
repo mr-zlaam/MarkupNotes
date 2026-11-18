@@ -193,6 +193,7 @@ class NoteListPanel(QWidget):
         """Update UI scaling factor and refresh note list layout."""
         self.ui_scale = scale
         self.header_stack.setFixedHeight(max(26, int(round(34 * scale))))
+        self.list_widget.doItemsLayout()
         self.list_widget.viewport().update()
 
     def set_note_colors(self, colors: Dict[str, str]) -> None:

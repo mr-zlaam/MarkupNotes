@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import (
 
 from core.github_client import GitHubClient, GitHubUser
 from utils.icons import create_eye_icon, create_github_icon
+from ui.theme import TOOLTIP_QSS
 
 
 class ModernCheckBox(QCheckBox):
@@ -200,7 +201,7 @@ class ModernGitHubAuthDialog(QDialog):
                 background-color: #0a84ff;
                 border-color: #0a84ff;
             }
-        """)
+        """ + TOOLTIP_QSS)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(26, 24, 26, 22)

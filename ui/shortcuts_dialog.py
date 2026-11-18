@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
 )
 
 from utils.icons import create_badge_pixmap, create_close_icon, create_keyboard_icon, create_search_icon
+from ui.theme import TOOLTIP_QSS
 
 
 SHORTCUT_GROUPS: List[Tuple[str, List[Tuple[str, str, List[str]]]]] = [
@@ -194,6 +195,13 @@ class ModernShortcutsDialog(QDialog):
             self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
             self.setFixedSize(840, 680)
 
+        self.setStyleSheet(f"""
+            QDialog {{
+                background-color: transparent;
+            }}
+            {TOOLTIP_QSS}
+        """)
+
         self._shortcut_rows: List[Tuple[ShortcutRow, QWidget]] = []
         self._group_widgets: List[Tuple[QWidget, List[ShortcutRow]]] = []
 
@@ -275,12 +283,13 @@ class ModernShortcutsDialog(QDialog):
         self.card = QFrame(parent=self)
         self.card.setObjectName("ShortcutsCard")
         self.card.setFixedSize(800, 640)
-        self.card.setStyleSheet("""
-            QFrame#ShortcutsCard {
+        self.card.setStyleSheet(f"""
+            QFrame#ShortcutsCard {{
                 background-color: #1c1c20;
                 border: 1px solid #3c3c46;
                 border-radius: 14px;
-            }
+            }}
+            {TOOLTIP_QSS}
         """)
 
         # Drop shadow for visual elevation
@@ -328,16 +337,17 @@ class ModernShortcutsDialog(QDialog):
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         close_btn.setToolTip("Close (Esc or Space)")
         close_btn.clicked.connect(self.reject)
-        close_btn.setStyleSheet("""
-            QPushButton {
+        close_btn.setStyleSheet(f"""
+            QPushButton {{
                 background-color: #242428;
                 border: 1px solid #383840;
                 border-radius: 6px;
-            }
-            QPushButton:hover {
+            }}
+            QPushButton:hover {{
                 background-color: #303038;
                 color: #ffffff;
-            }
+            }}
+            {TOOLTIP_QSS}
         """)
         header_layout.addWidget(close_btn)
 
