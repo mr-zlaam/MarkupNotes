@@ -83,6 +83,9 @@ SHORTCUT_GROUPS: List[Tuple[str, List[Tuple[str, str, List[str]]]]] = [
             ("Export Note", "Export note to PDF, HTML, or Markdown", ["Ctrl", "E"]),
             ("Keyboard Shortcuts", "Display this keyboard shortcuts cheatsheet", ["Ctrl", "/"]),
             ("Preferences & Settings", "Open application settings dialog", ["Ctrl", ","]),
+            ("Zoom In", "Increase editor text display size", ["Ctrl", "+"]),
+            ("Zoom Out", "Decrease editor text display size", ["Ctrl", "-"]),
+            ("Reset Zoom", "Restore default editor text size", ["Ctrl", "0"]),
         ],
     ),
 ]

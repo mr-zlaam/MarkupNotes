@@ -123,13 +123,13 @@ class TestSettingsDialog(unittest.TestCase):
         self.assertFalse(switch.isChecked())
 
     def test_settings_dialog_initialization_and_pages(self) -> None:
-        """Verify dialog initializes with 6 category pages and navigation buttons."""
+        """Verify dialog initializes with 5 category pages and navigation buttons."""
         dialog = ModernSettingsDialog(self.config_manager)
         dialog.show()
 
-        self.assertEqual(len(dialog.category_buttons), 6)
-        self.assertEqual(dialog.stack.count(), 6)
-        self.assertTrue(len(dialog.setting_rows) >= 15)
+        self.assertEqual(len(dialog.category_buttons), 5)
+        self.assertEqual(dialog.stack.count(), 5)
+        self.assertTrue(len(dialog.setting_rows) >= 12)
 
         # Test category switching
         dialog._on_category_clicked(1)  # Editor
@@ -137,9 +137,9 @@ class TestSettingsDialog(unittest.TestCase):
         self.assertTrue(dialog.category_buttons[1].isChecked())
         self.assertFalse(dialog.category_buttons[0].isChecked())
 
-        dialog._on_category_clicked(4)  # Git & Backup
-        self.assertEqual(dialog.stack.currentIndex(), 4)
-        self.assertTrue(dialog.category_buttons[4].isChecked())
+        dialog._on_category_clicked(3)  # Git & Backup
+        self.assertEqual(dialog.stack.currentIndex(), 3)
+        self.assertTrue(dialog.category_buttons[3].isChecked())
         dialog.close()
 
     def test_settings_dialog_search_filter(self) -> None:
@@ -254,8 +254,11 @@ class TestSettingsDialog(unittest.TestCase):
         self.assertNotIn("Editor Font Family", titles)
         self.assertNotIn("Auto-Save Delay", titles)
         self.assertNotIn("Runtime Environment", titles)
+        self.assertNotIn("GitHub Remote Repository", titles)
 
         self.assertIn("Confirm on Delete", titles)
+        self.assertIn("Interface Theme", titles)
+        self.assertIn("Item Color Customizations", titles)
         self.assertIn("Notes Storage Folder", titles)
         self.assertIn("Font Size", titles)
         self.assertIn("Line Height", titles)
@@ -391,6 +394,52 @@ class TestSettingsDialog(unittest.TestCase):
         cmd_ids = [cmd.id for cmd in COMMANDS]
         self.assertIn("code", cmd_ids)
         self.assertIn("inline_code", cmd_ids)
+
+    def test_editor_zoom_in_out_and_persistence(self) -> None:
+        """Verify Ctrl+/Ctrl- zoom actions resize editor font and persist to config."""
+        from core.storage import StorageManager
+        from ui.main_window import MainWindow
+
+        notes_dir = Path(self.temp_dir.name) / "notes"
+        notes_dir.mkdir(parents=True, exist_ok=True)
+        storage = StorageManager(root_dir=notes_dir)
+        win = MainWindow(storage_manager=storage, config_manager=self.config_manager)
+
+        # Base font size is 12
+        self.assertEqual(win.editor.editor.font().pointSize(), 12)
+        self.assertEqual(self.config_manager.settings.editor.font_size, 12)
+
+        # Zoom in
+        win._on_zoom_in()
+        self.assertEqual(win.editor.editor.font().pointSize(), 13)
+        self.assertEqual(self.config_manager.settings.editor.font_size, 13)
+
+        # Zoom in again
+        win._on_zoom_in()
+        self.assertEqual(win.editor.editor.font().pointSize(), 14)
+        self.assertEqual(self.config_manager.settings.editor.font_size, 14)
+
+        # Zoom out
+        win._on_zoom_out()
+        self.assertEqual(win.editor.editor.font().pointSize(), 13)
+        self.assertEqual(self.config_manager.settings.editor.font_size, 13)
+
+        # Zoom reset
+        win._on_zoom_reset()
+        self.assertEqual(win.editor.editor.font().pointSize(), 12)
+        self.assertEqual(self.config_manager.settings.editor.font_size, 12)
+
+        # Verify key press simulation directly on editor
+        zoom_in_ev = QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_Equal, Qt.KeyboardModifier.ControlModifier, "=")
+        win.editor.editor.keyPressEvent(zoom_in_ev)
+        self.assertEqual(win.editor.editor.font().pointSize(), 13)
+
+        zoom_out_ev = QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_Minus, Qt.KeyboardModifier.ControlModifier, "-")
+        win.editor.editor.keyPressEvent(zoom_out_ev)
+        self.assertEqual(win.editor.editor.font().pointSize(), 12)
+
+        win.close()
+        win.deleteLater()
 
 
 if __name__ == "__main__":

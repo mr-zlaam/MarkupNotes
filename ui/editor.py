@@ -149,12 +149,14 @@ class MarkdownEditor(QTextEdit):
     up_at_top_requested = pyqtSignal()
     find_requested = pyqtSignal(bool)  # is_replace_mode
     find_close_requested = pyqtSignal()
+    zoom_changed = pyqtSignal(int)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent=parent)
         self.setObjectName("MarkdownEditor")
         self.setPlaceholderText("Type text or / for commands")
         self.setAcceptRichText(False)
+        self._tab_size: int = 2
 
         # Guarantee strict Left-to-Right layout and clean word wrapping
         self.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
@@ -243,6 +245,49 @@ class MarkdownEditor(QTextEdit):
         self._search_query: str = ""
         self._search_case: bool = False
         self._search_word: bool = False
+
+    def zoom_in(self, step: int = 1) -> None:
+        """Increase editor font point size within comfortable bounds (min 8, max 40)."""
+        font = self.font()
+        cur_size = font.pointSize()
+        if cur_size <= 0:
+            cur_size = font.pixelSize() or 12
+        new_size = min(40, cur_size + step)
+        if new_size != cur_size:
+            font.setPointSize(new_size)
+            self.setFont(font)
+            self.document().setDefaultFont(font)
+            metrics = self.fontMetrics()
+            self.setTabStopDistance(float(metrics.horizontalAdvance(' ') * getattr(self, "_tab_size", 2)))
+            self.viewport().update()
+            self.zoom_changed.emit(new_size)
+
+    def zoom_out(self, step: int = 1) -> None:
+        """Decrease editor font point size within comfortable bounds (min 8, max 40)."""
+        font = self.font()
+        cur_size = font.pointSize()
+        if cur_size <= 0:
+            cur_size = font.pixelSize() or 12
+        new_size = max(8, cur_size - step)
+        if new_size != cur_size:
+            font.setPointSize(new_size)
+            self.setFont(font)
+            self.document().setDefaultFont(font)
+            metrics = self.fontMetrics()
+            self.setTabStopDistance(float(metrics.horizontalAdvance(' ') * getattr(self, "_tab_size", 2)))
+            self.viewport().update()
+            self.zoom_changed.emit(new_size)
+
+    def zoom_reset(self, default_size: int = 12) -> None:
+        """Reset editor font size to standard default (12px)."""
+        font = self.font()
+        font.setPointSize(default_size)
+        self.setFont(font)
+        self.document().setDefaultFont(font)
+        metrics = self.fontMetrics()
+        self.setTabStopDistance(float(metrics.horizontalAdvance(' ') * getattr(self, "_tab_size", 2)))
+        self.viewport().update()
+        self.zoom_changed.emit(default_size)
 
     def focusOutEvent(self, event) -> None:
         if self.slash_palette.isVisible() and not self.slash_palette.hasFocus():
@@ -1962,11 +2007,21 @@ class MarkdownEditor(QTextEdit):
         super().mouseReleaseEvent(event)
 
     def wheelEvent(self, event: QWheelEvent) -> None:
-        """Handle horizontal scrolling on tables and code blocks with trackpad or Shift+Wheel."""
+        """Handle horizontal scrolling on tables and code blocks with trackpad or Shift+Wheel, and Ctrl+Wheel zooming."""
         if self.slash_palette.isVisible():
             self.slash_palette.hide()
         if hasattr(self, "format_toolbar") and self.format_toolbar.isVisible():
             self.format_toolbar.hide()
+
+        # Ctrl+MouseWheel: Zoom In / Zoom Out
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            delta_y = event.angleDelta().y()
+            if delta_y > 0:
+                self.zoom_in()
+            elif delta_y < 0:
+                self.zoom_out()
+            event.accept()
+            return
 
         pos = event.position()
         delta_x = event.angleDelta().x()
@@ -2105,6 +2160,24 @@ class MarkdownEditor(QTextEdit):
 
         # Ctrl-based productivity and markdown formatting shortcuts
         if has_ctrl and not has_alt:
+            # Ctrl++ or Ctrl+= zooms in
+            if event.key() in (Qt.Key.Key_Plus, Qt.Key.Key_Equal) or event.text() in ("+", "="):
+                self.zoom_in()
+                event.accept()
+                return
+
+            # Ctrl+- or Ctrl+_ zooms out
+            if event.key() in (Qt.Key.Key_Minus, Qt.Key.Key_Underscore) or event.text() in ("-", "_"):
+                self.zoom_out()
+                event.accept()
+                return
+
+            # Ctrl+0 resets zoom
+            if event.key() == Qt.Key.Key_0 or event.text() == "0":
+                self.zoom_reset()
+                event.accept()
+                return
+
             # Ctrl+/ or Ctrl+? opens shortcuts modal
             if event.key() in (Qt.Key.Key_Slash, Qt.Key.Key_Question) or event.text() in ("/", "?"):
                 self._show_shortcuts_dialog()
@@ -2546,6 +2619,7 @@ class EditorPanel(QWidget):
     open_file_requested = pyqtSignal()
     backup_requested = pyqtSignal()
     settings_requested = pyqtSignal()
+    zoom_changed = pyqtSignal(int)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent=parent)
@@ -2662,6 +2736,7 @@ class EditorPanel(QWidget):
         self.editor = MarkdownEditor(parent=self)
         self.editor.textChanged.connect(self._on_text_changed)
         self.editor.up_at_top_requested.connect(self._on_up_at_top)
+        self.editor.zoom_changed.connect(self.zoom_changed.emit)
 
         # In-note Find & Replace Bar
         self.find_replace_bar = FindReplaceBar(parent=self)
@@ -3004,6 +3079,18 @@ class EditorPanel(QWidget):
         else:
             self.content_saved.emit(content)
 
+    def zoom_in(self) -> None:
+        """Increase editor text display size."""
+        self.editor.zoom_in()
+
+    def zoom_out(self) -> None:
+        """Decrease editor text display size."""
+        self.editor.zoom_out()
+
+    def zoom_reset(self) -> None:
+        """Reset editor text display size to standard default."""
+        self.editor.zoom_reset()
+
     def apply_config(self, config: Any) -> None:
         """Apply live configuration settings to the editor canvas."""
         if hasattr(config, "editor"):
@@ -3013,9 +3100,11 @@ class EditorPanel(QWidget):
             if config.editor.font_family and config.editor.font_family != "System":
                 font.setFamily(config.editor.font_family)
             self.editor.setFont(font)
+            self.editor.document().setDefaultFont(font)
             mode = QTextEdit.LineWrapMode.WidgetWidth if config.editor.word_wrap else QTextEdit.LineWrapMode.NoWrap
             self.editor.setLineWrapMode(mode)
             metrics = self.editor.fontMetrics()
+            self.editor._tab_size = config.editor.tab_size
             self.editor.setTabStopDistance(float(metrics.horizontalAdvance(' ') * config.editor.tab_size))
 
         if hasattr(config, "markdown"):

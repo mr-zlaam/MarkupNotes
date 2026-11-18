@@ -114,6 +114,7 @@ class MainWindow(QMainWindow):
         self.editor.open_file_requested.connect(self._on_open_file_dialog)
         self.editor.backup_requested.connect(self.toggle_backup_panel)
         self.editor.settings_requested.connect(self._show_settings_dialog)
+        self.editor.zoom_changed.connect(self._on_editor_zoom_changed)
 
         # 4. Far Right: Backup & Version History Panel
         self.backup_panel = BackupPanel(
@@ -211,6 +212,37 @@ class MainWindow(QMainWindow):
         # Dedicated Settings Dialog (Ctrl+,)
         settings_sc = QShortcut(QKeySequence("Ctrl+,"), self)
         settings_sc.activated.connect(self._show_settings_dialog)
+
+        # Zoom In (Ctrl++ and Ctrl+=)
+        zoom_in_sc = QShortcut(QKeySequence("Ctrl++"), self)
+        zoom_in_sc.activated.connect(self._on_zoom_in)
+        zoom_in_eq_sc = QShortcut(QKeySequence("Ctrl+="), self)
+        zoom_in_eq_sc.activated.connect(self._on_zoom_in)
+
+        # Zoom Out (Ctrl+-)
+        zoom_out_sc = QShortcut(QKeySequence("Ctrl+-"), self)
+        zoom_out_sc.activated.connect(self._on_zoom_out)
+
+        # Reset Zoom (Ctrl+0)
+        zoom_reset_sc = QShortcut(QKeySequence("Ctrl+0"), self)
+        zoom_reset_sc.activated.connect(self._on_zoom_reset)
+
+    def _on_zoom_in(self) -> None:
+        """Increase editor text view font size."""
+        self.editor.zoom_in()
+
+    def _on_zoom_out(self) -> None:
+        """Decrease editor text view font size."""
+        self.editor.zoom_out()
+
+    def _on_zoom_reset(self) -> None:
+        """Reset editor text view font size to standard default."""
+        self.editor.zoom_reset()
+
+    def _on_editor_zoom_changed(self, new_size: int) -> None:
+        """Persist editor font size modifications from zoom actions."""
+        self.config_manager.update_editor(font_size=new_size)
+        self.config = self.config_manager.settings
 
     def _show_shortcuts_cheatsheet(self) -> None:
         """Open the modern keyboard shortcuts reference cheatsheet dialog."""

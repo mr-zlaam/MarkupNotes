@@ -416,9 +416,8 @@ class ModernSettingsDialog(QDialog):
             ("General", create_sliders_icon("#9e9ea6", size=15), 0),
             ("Editor", create_type_icon("#9e9ea6", size=15), 1),
             ("Markdown", create_code_icon("#9e9ea6", size=15), 2),
-            ("Appearance", create_palette_icon("#9e9ea6", size=15), 3),
-            ("Git & Backup", create_backup_icon("#9e9ea6", size=15), 4),
-            ("About", create_info_icon("#9e9ea6", size=15), 5),
+            ("Git & Backup", create_backup_icon("#9e9ea6", size=15), 3),
+            ("About", create_info_icon("#9e9ea6", size=15), 4),
         ]
 
         for name, icon, idx in categories:
@@ -470,7 +469,6 @@ class ModernSettingsDialog(QDialog):
         self.stack.addWidget(self._build_general_page())
         self.stack.addWidget(self._build_editor_page())
         self.stack.addWidget(self._build_markdown_page())
-        self.stack.addWidget(self._build_appearance_page())
         self.stack.addWidget(self._build_backup_page())
         self.stack.addWidget(self._build_about_page())
 
@@ -599,16 +597,38 @@ class ModernSettingsDialog(QDialog):
         layout.addWidget(r1)
         self.setting_rows.append(r1)
 
-        # 2. Open Notes Folder
+        # 2. Interface Theme (moved from Appearance)
+        theme_combo = ModernComboBox()
+        theme_combo.addItems(["Dark Modern (Default)", "OLED Black", "System Match"])
+        theme_map = {"dark": 0, "oled": 1, "system": 2}
+        theme_combo.setCurrentIndex(theme_map.get(cfg.appearance.theme, 0))
+        theme_combo.currentIndexChanged.connect(self._on_theme_changed)
+        r2 = SettingRow("Interface Theme", "Application background palette and interface styling", theme_combo)
+        layout.addWidget(r2)
+        self.setting_rows.append(r2)
+
+        # 3. Clear Folder and Note Color Overrides (moved from Appearance)
+        clear_colors_btn = QPushButton("Reset Custom Colors")
+        clear_colors_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        clear_colors_btn.setStyleSheet("background-color: #282830; color: #e0e0e6; border: 1px solid #3c3c46; border-radius: 6px; padding: 5px 12px; font-size: 12px;")
+        clear_colors_btn.clicked.connect(self._on_clear_custom_colors)
+        num_folders = len(cfg.appearance.folder_colors)
+        num_notes = len(cfg.appearance.note_colors)
+        desc = f"{num_folders} folder overrides, {num_notes} note color overrides active"
+        r3 = SettingRow("Item Color Customizations", desc, clear_colors_btn)
+        layout.addWidget(r3)
+        self.setting_rows.append(r3)
+
+        # 4. Open Notes Folder
         open_folder_btn = QPushButton("Reveal in File Manager")
         open_folder_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         open_folder_btn.setStyleSheet("background-color: #282830; color: #e0e0e6; border: 1px solid #3c3c46; border-radius: 6px; padding: 5px 12px; font-size: 12px;")
         open_folder_btn.clicked.connect(self._reveal_notes_folder)
-        r2 = SettingRow("Notes Storage Folder", str(get_default_notes_dir()), open_folder_btn)
-        layout.addWidget(r2)
-        self.setting_rows.append(r2)
+        r4 = SettingRow("Notes Storage Folder", str(get_default_notes_dir()), open_folder_btn)
+        layout.addWidget(r4)
+        self.setting_rows.append(r4)
 
-        # 3. Restore Factory Defaults
+        # 5. Restore Factory Defaults
         factory_reset_btn = QPushButton("Reset to Defaults")
         factory_reset_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         factory_reset_btn.setStyleSheet("""
@@ -628,13 +648,13 @@ class ModernSettingsDialog(QDialog):
             }
         """)
         factory_reset_btn.clicked.connect(self._reset_to_defaults)
-        r3 = SettingRow(
+        r5 = SettingRow(
             "Restore Factory Defaults",
             "Reset all settings, editor typography, layout sizes, and appearance colors to initial factory state as if opening Markup Notes for the first time",
             factory_reset_btn,
         )
-        layout.addWidget(r3)
-        self.setting_rows.append(r3)
+        layout.addWidget(r5)
+        self.setting_rows.append(r5)
 
         layout.addStretch()
         return scroll
@@ -741,36 +761,6 @@ class ModernSettingsDialog(QDialog):
         layout.addStretch()
         return scroll
 
-    def _build_appearance_page(self) -> QWidget:
-        """Construct the Appearance & Theme settings page."""
-        scroll, layout = self._create_scroll_page()
-        cfg = self.config_manager.settings
-
-        # 1. Theme Selection
-        theme_combo = ModernComboBox()
-        theme_combo.addItems(["Dark Modern (Default)", "OLED Black", "System Match"])
-        theme_map = {"dark": 0, "oled": 1, "system": 2}
-        theme_combo.setCurrentIndex(theme_map.get(cfg.appearance.theme, 0))
-        theme_combo.currentIndexChanged.connect(self._on_theme_changed)
-        r1 = SettingRow("Interface Theme", "Application background palette and interface styling", theme_combo)
-        layout.addWidget(r1)
-        self.setting_rows.append(r1)
-
-        # 2. Clear Folder and Note Color Overrides
-        clear_colors_btn = QPushButton("Reset Custom Colors")
-        clear_colors_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        clear_colors_btn.setStyleSheet("background-color: #282830; color: #e0e0e6; border: 1px solid #3c3c46; border-radius: 6px; padding: 5px 12px; font-size: 12px;")
-        clear_colors_btn.clicked.connect(self._on_clear_custom_colors)
-        num_folders = len(cfg.appearance.folder_colors)
-        num_notes = len(cfg.appearance.note_colors)
-        desc = f"{num_folders} folder overrides, {num_notes} note color overrides active"
-        r2 = SettingRow("Item Color Customizations", desc, clear_colors_btn)
-        layout.addWidget(r2)
-        self.setting_rows.append(r2)
-
-        layout.addStretch()
-        return scroll
-
     def _build_backup_page(self) -> QWidget:
         """Construct the Git & Cloud Backup settings page."""
         scroll, layout = self._create_scroll_page()
@@ -791,16 +781,6 @@ class ModernSettingsDialog(QDialog):
         r2 = SettingRow("Local Git Repository", str(notes_git_dir), status_lbl)
         layout.addWidget(r2)
         self.setting_rows.append(r2)
-
-        # 3. GitHub Remote Repository URL
-        repo_edit = QLineEdit(cfg.backup.github_repo_url)
-        repo_edit.setPlaceholderText("https://github.com/user/my-notes.git")
-        repo_edit.setFixedWidth(220)
-        repo_edit.setStyleSheet("background-color: #24242a; color: #f2f2f6; border: 1px solid #3c3c46; border-radius: 6px; padding: 4px 8px; font-size: 12px;")
-        repo_edit.editingFinished.connect(lambda: self._on_github_repo_changed(repo_edit.text()))
-        r3 = SettingRow("GitHub Remote Repository", "Target git remote URL for cloud synchronization", repo_edit)
-        layout.addWidget(r3)
-        self.setting_rows.append(r3)
 
         layout.addStretch()
         return scroll
@@ -928,11 +908,6 @@ class ModernSettingsDialog(QDialog):
         self.config_manager.set_auto_backup(checked)
         self.settings_updated.emit()
 
-    def _on_github_repo_changed(self, url: str) -> None:
-        self.config_manager.settings.backup.github_repo_url = url.strip()
-        self.config_manager.save()
-        self.settings_updated.emit()
-
     def _reveal_notes_folder(self) -> None:
         """Open the notes directory in system file manager."""
         folder = get_default_notes_dir()
@@ -968,7 +943,6 @@ class ModernSettingsDialog(QDialog):
         self.stack.addWidget(self._build_general_page())
         self.stack.addWidget(self._build_editor_page())
         self.stack.addWidget(self._build_markdown_page())
-        self.stack.addWidget(self._build_appearance_page())
         self.stack.addWidget(self._build_backup_page())
         self.stack.addWidget(self._build_about_page())
         self.stack.setCurrentIndex(current_idx)
