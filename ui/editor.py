@@ -1321,7 +1321,7 @@ class MarkdownEditor(QTextEdit):
         # 4.5. Render Inactive Date Cards (@date(...))
         self._date_card_rects.clear()
         scale = getattr(self, "ui_scale", 1.0)
-        card_h = round(34.0 * scale)
+        card_h = round(52.0 * scale)
         for b_num, target_date in self.highlighter.date_blocks.items():
             if b_num == active_bn:
                 continue

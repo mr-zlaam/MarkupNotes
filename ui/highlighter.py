@@ -325,7 +325,7 @@ class MarkdownHighlighter(QSyntaxHighlighter):
 
         # 5. Date Cards (@date(...))
         self.date_blocks.clear()
-        date_pt = max(14, int(round(20 * scale)))
+        date_pt = max(18, int(round(30 * scale)))
         b_node = doc.firstBlock()
         while b_node.isValid():
             text_line = b_node.text()
