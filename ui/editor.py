@@ -44,12 +44,21 @@ from PyQt6.QtWidgets import (
 )
 
 from core.note import Note
+from ui.context_menu import ModernContextMenu
 from ui.date_picker import ModernDatePickerDialog
 from ui.dialogs import ModernLinkDialog
 from ui.find_replace import FindReplaceBar
 from ui.highlighter import HR_RE, HTML_KBD_RE, LIST_RE, QUOTE_RE, MarkdownHighlighter
 from ui.selection_toolbar import SelectionFormatToolbar
 from ui.slash_menu import SlashCommand, SlashCommandPalette
+from utils.block_ops import (
+    delete_selected_blocks,
+    duplicate_selected_blocks,
+    get_callout_info,
+    move_selected_blocks_down,
+    move_selected_blocks_up,
+    render_grip_handle,
+)
 from utils.date_card import render_date_card
 from utils.exporter import export_note_to_html, export_note_to_pdf
 from utils.video_engine import (
@@ -278,6 +287,10 @@ class MarkdownEditor(QTextEdit):
         self._hovered_video_play: Optional[int] = None
         YouTubeCacheManager.instance().thumbnail_ready.connect(self._on_youtube_thumbnail_ready)
 
+        # Block-level grip handle interaction state
+        self._hovered_grip_block: Optional[int] = None
+        self._hovered_grip_rect: Optional[QRectF] = None
+
         # Floating text format bubble toolbar (Notion-style inline formatting)
         self.format_toolbar = SelectionFormatToolbar(self)
         self.format_toolbar.format_requested.connect(self._apply_text_format)
@@ -324,6 +337,90 @@ class MarkdownEditor(QTextEdit):
                 padding: 6px {h_pad}px 24px {h_pad}px;
             }}
         """)
+
+    def _move_block_up(self) -> None:
+        """Move the current line or selected block(s) up by one block."""
+        new_cursor = move_selected_blocks_up(self.document(), self.textCursor())
+        self.setTextCursor(new_cursor)
+        self.ensureCursorVisible()
+        self._margin_timer.start()
+        self.viewport().update()
+
+    def _move_block_down(self) -> None:
+        """Move the current line or selected block(s) down by one block."""
+        new_cursor = move_selected_blocks_down(self.document(), self.textCursor())
+        self.setTextCursor(new_cursor)
+        self.ensureCursorVisible()
+        self._margin_timer.start()
+        self.viewport().update()
+
+    def _duplicate_block(self) -> None:
+        """Duplicate the current line or selected block(s) immediately below."""
+        new_cursor = duplicate_selected_blocks(self.document(), self.textCursor())
+        self.setTextCursor(new_cursor)
+        self.ensureCursorVisible()
+        self._margin_timer.start()
+        self.viewport().update()
+
+    def _delete_block(self) -> None:
+        """Delete the current line or selected block(s) cleanly."""
+        new_cursor = delete_selected_blocks(self.document(), self.textCursor())
+        self.setTextCursor(new_cursor)
+        self.ensureCursorVisible()
+        self._margin_timer.start()
+        self.viewport().update()
+
+    def _get_callout_info_for_block(self, block: QTextBlock) -> Optional[Tuple[str, QColor, str]]:
+        """Walk upwards through contiguous quote blocks to check if this line belongs to a callout."""
+        cur = block
+        while cur.isValid() and cur.userState() != 1 and ">" in cur.text():
+            info = get_callout_info(cur.text())
+            if info is not None:
+                return info
+            if not QUOTE_RE.match(cur.text()):
+                break
+            cur = cur.previous()
+        return None
+
+    def _show_block_menu(self, block_num: int, global_pos: QPoint) -> None:
+        """Display Notion/Anytype-style block manipulation context menu."""
+        b = self.document().findBlockByNumber(block_num)
+        if not b.isValid():
+            return
+
+        c = QTextCursor(b)
+        c.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
+        self.setTextCursor(c)
+
+        menu = ModernContextMenu(parent=self)
+        menu.addAction("Duplicate Block", self._duplicate_block)
+        menu.addAction("Move Up", self._move_block_up)
+        menu.addAction("Move Down", self._move_block_down)
+        del_act = menu.addAction("Delete Block", self._delete_block)
+        del_act.setProperty("is_destructive", True)
+        menu.addSeparator()
+
+        def _turn_into(prefix: str) -> None:
+            cur = QTextCursor(b)
+            cur.beginEditBlock()
+            old_t = b.text()
+            new_t = transform_line_block_prefix(old_t, prefix)
+            cur.select(QTextCursor.SelectionType.LineUnderCursor)
+            cur.insertText(new_t)
+            cur.endEditBlock()
+            self._margin_timer.start()
+            self.viewport().update()
+
+        menu.addAction("Turn into Checklist", lambda: _turn_into("- [ ] "))
+        menu.addAction("Turn into Bullet List", lambda: _turn_into("- "))
+        menu.addAction("Turn into Heading 1", lambda: _turn_into("# "))
+        menu.addAction("Turn into Heading 2", lambda: _turn_into("## "))
+        menu.addAction("Turn into Blockquote", lambda: _turn_into("> "))
+        menu.addAction("Turn into Note Callout", lambda: _turn_into("> [!NOTE] "))
+        menu.addAction("Turn into Tip Callout", lambda: _turn_into("> [!TIP] "))
+        menu.addAction("Turn into Warning Callout", lambda: _turn_into("> [!WARNING] "))
+
+        menu.exec(global_pos)
 
     def set_font_size(self, size_pt: int) -> None:
         """Set the editor base font size in points and update stylesheet."""
@@ -1677,7 +1774,7 @@ class MarkdownEditor(QTextEdit):
                     painter.setPen(QPen(QColor("#48484a"), 1.2))
                     painter.drawLine(QPointF(float(b_rect.left()), line_y), QPointF(float(vp_width - 24.0), line_y))
 
-            # Blockquote vertical accent bars (for all quote lines, outside code blocks)
+            # Blockquote & Callout vertical accent bars (for all quote lines, outside code blocks)
             if block.userState() != 1 and ">" in text:
                 qm_bar = QUOTE_RE.match(text)
                 if qm_bar:
@@ -1695,8 +1792,25 @@ class MarkdownEditor(QTextEdit):
                         if bot_y >= 0 and top_y <= vp_height:
                             painter.save()
                             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+                            callout_info = self._get_callout_info_for_block(block)
+                            bar_color = callout_info[1] if callout_info else QColor("#545462")
+                            bar_width = 3.2 if callout_info else 2.6
+
                             target_m = level_bar * 18.0 + 8.0
                             base_x = float(r_s_b.left()) - target_m + 4.0
+
+                            # Render subtle tinted background for callouts
+                            if callout_info and level_bar == 1:
+                                card_bg = QColor(bar_color.red(), bar_color.green(), bar_color.blue(), 20)
+                                card_r = QRectF(
+                                    base_x - 2.0,
+                                    top_y,
+                                    max(100.0, float(vp_width - base_x - self._horizontal_padding)),
+                                    float(bot_y - top_y),
+                                )
+                                painter.fillRect(card_r, card_bg)
+
                             for lvl in range(level_bar):
                                 bx = base_x + lvl * 18.0
                                 next_b = block.next()
@@ -1706,7 +1820,7 @@ class MarkdownEditor(QTextEdit):
                                     if next_qm and next_qm.group(1).count(">") > lvl:
                                         connects_next = True
 
-                                pen = QPen(QColor("#545462"), 2.6)
+                                pen = QPen(bar_color, bar_width)
                                 if not connects_next:
                                     pen.setCapStyle(Qt.PenCapStyle.RoundCap)
                                 painter.setPen(pen)
@@ -1869,6 +1983,22 @@ class MarkdownEditor(QTextEdit):
                         painter.drawPixmap(QPointF(float(rect.left()), py), pix)
 
             block = block.next()
+
+        # Render 6-dot grip handle in left gutter for the hovered or active block
+        grip_target = self._hovered_grip_block if self._hovered_grip_block is not None else active_bn
+        if grip_target is not None:
+            target_b = self.document().findBlockByNumber(grip_target)
+            if target_b.isValid():
+                r_b = self.cursorRect(QTextCursor(target_b))
+                if 0 <= r_b.top() <= vp_height:
+                    grip_w = 14.0 * scale
+                    grip_h = 18.0 * scale
+                    grip_x = 10.0 * scale
+                    grip_y = float(r_b.top()) + max(0.0, (float(r_b.height()) - grip_h) / 2.0)
+                    grip_rect = QRectF(grip_x, grip_y, grip_w, grip_h)
+                    self._hovered_grip_rect = grip_rect
+                    is_h = self._hovered_grip_block == grip_target
+                    render_grip_handle(painter, grip_rect, is_hovered=is_h, ui_scale=scale)
 
         painter.end()
 
@@ -2294,6 +2424,25 @@ class MarkdownEditor(QTextEdit):
                         QToolTip.hideText()
                         return
 
+        # Check hover over 6-dot grip handle in left margin
+        old_grip = self._hovered_grip_block
+        if pos.x() <= 28.0 * scale:
+            block_under = self.cursorForPosition(pos.toPoint()).block()
+            if block_under.isValid():
+                self._hovered_grip_block = block_under.blockNumber()
+                if self._hovered_grip_block != old_grip:
+                    self.viewport().update()
+                self.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
+                QToolTip.showText(
+                    event.globalPosition().toPoint(),
+                    "Click to select block\nRight-click for block actions",
+                    self.viewport(),
+                )
+                return
+        elif self._hovered_grip_block is not None:
+            self._hovered_grip_block = None
+            self.viewport().update()
+
         # Checkboxes
         if self._checkbox_block_at_pos(pos) is not None:
             self.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
@@ -2385,6 +2534,23 @@ class MarkdownEditor(QTextEdit):
             return
         elif self._touch_tracker.is_active:
             self._touch_tracker.reset()
+
+        pos = event.position()
+        scale = getattr(self, "ui_scale", 1.0)
+
+        # Handle click on left margin 6-dot grip handle
+        if pos.x() <= 28.0 * scale:
+            click_b = self.cursorForPosition(pos.toPoint()).block()
+            if click_b.isValid():
+                if event.button() == Qt.MouseButton.LeftButton:
+                    c = QTextCursor(click_b)
+                    c.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
+                    self.setTextCursor(c)
+                    self.viewport().update()
+                    return
+                elif event.button() == Qt.MouseButton.RightButton:
+                    self._show_block_menu(click_b.blockNumber(), event.globalPosition().toPoint())
+                    return
 
         if event.button() == Qt.MouseButton.LeftButton:
             pos = event.position()
@@ -2543,6 +2709,9 @@ class MarkdownEditor(QTextEdit):
 
     def leaveEvent(self, event: QEvent) -> None:
         """Clear button and card hover states when the cursor leaves the editor."""
+        if self._hovered_grip_block is not None:
+            self._hovered_grip_block = None
+            self.viewport().update()
         if self._hovered_date_block is not None:
             self._hovered_date_block = None
             self.viewport().update()
@@ -2711,6 +2880,18 @@ class MarkdownEditor(QTextEdit):
 
         # Alt-based productivity shortcuts
         if has_alt and not has_ctrl:
+            # Alt+Up: Move Line / Block Up
+            if event.key() == Qt.Key.Key_Up:
+                self._move_block_up()
+                event.accept()
+                return
+
+            # Alt+Down: Move Line / Block Down
+            if event.key() == Qt.Key.Key_Down:
+                self._move_block_down()
+                event.accept()
+                return
+
             # Alt+W: Toggle Word Wrap
             if event.key() == Qt.Key.Key_W or event.text().lower() == "w":
                 self.toggle_word_wrap()
@@ -2814,6 +2995,14 @@ class MarkdownEditor(QTextEdit):
                     return
                 elif event.key() == Qt.Key.Key_Q:
                     self._apply_blockquote()
+                    event.accept()
+                    return
+                elif event.key() == Qt.Key.Key_D:
+                    self._duplicate_block()
+                    event.accept()
+                    return
+                elif event.key() in (Qt.Key.Key_Backspace, Qt.Key.Key_Delete):
+                    self._delete_block()
                     event.accept()
                     return
 

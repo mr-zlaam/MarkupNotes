@@ -131,6 +131,14 @@ COMMANDS: List[SlashCommand] = [
         prefix="https://www.youtube.com/watch?v=",
         keywords=("youtube", "video", "embed", "play", "media", "stream"),
     ),
+    SlashCommand(
+        id="callout",
+        title="Callout Box",
+        description="Emphasize information in a styled note banner",
+        icon="!",
+        prefix="> [!NOTE] ",
+        keywords=("callout", "note", "tip", "warning", "info", "admonition", "alert"),
+    ),
 ]
 
 

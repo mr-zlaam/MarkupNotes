@@ -20,6 +20,11 @@ from utils.code_engine import (
     find_code_regions,
 )
 from utils.date_format import parse_date_string
+from utils.block_ops import (
+    CALLOUT_COLORS,
+    CALLOUT_PATTERN,
+    get_callout_info,
+)
 from utils.video_engine import (
     VideoRegion,
     find_video_regions,
@@ -256,6 +261,14 @@ class MarkdownHighlighter(QSyntaxHighlighter):
         self.kbd_format.setBackground(QColor("#2c2c34"))
         self.kbd_format.setForeground(QColor("#f5f5f7"))
         self.kbd_format.setFontWeight(QFont.Weight.DemiBold)
+
+        # Callout tag formats (> [!NOTE], [!TIP], etc.)
+        self.callout_formats: Dict[str, QTextCharFormat] = {}
+        for c_type, color in CALLOUT_COLORS.items():
+            fmt = QTextCharFormat()
+            fmt.setForeground(color)
+            fmt.setFontWeight(QFont.Weight.DemiBold)
+            self.callout_formats[c_type] = fmt
 
     def refresh_regions(self) -> Set[int]:
         """Re-scan document for tables, display math, and mermaid blocks, returning changed block numbers."""
@@ -548,6 +561,16 @@ class MarkdownHighlighter(QSyntaxHighlighter):
                 self._format(text, 0, len(prefix), self.quote_bar_format)
             else:
                 self._format(text, 0, len(prefix), self.hidden_format)
+
+            # Callout tag styling (> [!NOTE] ...)
+            c_info = get_callout_info(text)
+            if c_info:
+                c_type, c_color, c_title = c_info
+                tag_fmt = self.callout_formats.get(c_type)
+                if tag_fmt:
+                    tag_m = re.search(r"\[![a-zA-Z]+\]", text)
+                    if tag_m:
+                        self._format(text, tag_m.start(), tag_m.end() - tag_m.start(), tag_fmt)
 
             # Check if content inside blockquote is a checkbox or a list
             inner_text = text[len(prefix):]

@@ -49,6 +49,10 @@ SHORTCUT_GROUPS: List[Tuple[str, List[Tuple[str, str, List[str]]]]] = [
             ("Indent List Item", "Indent bullet or task by 2 spaces", ["Tab"]),
             ("Outdent List Item", "Outdent bullet or task item", ["Shift", "Tab"]),
             ("Slash Command Palette", "Open Notion-style block insert palette", ["/"]),
+            ("Move Block Up", "Move current line or block selection up", ["Alt", "Up Arrow"]),
+            ("Move Block Down", "Move current line or block selection down", ["Alt", "Down Arrow"]),
+            ("Duplicate Block", "Duplicate current line or block selection below", ["Ctrl", "Shift", "D"]),
+            ("Delete Block", "Delete current line or block selection", ["Ctrl", "Shift", "Backspace"]),
         ],
     ),
     (
