@@ -404,7 +404,7 @@ class TestTouchpadAndCheckboxHover(unittest.TestCase):
 
         dim_color = "#787880"
         self.assertIn("bold", slice_map)
-        self.assertEqual(slice_map["bold"].fontWeight(), QFont.Weight.Bold)
+        self.assertEqual(slice_map["bold"].fontWeight(), QFont.Weight.DemiBold)
         self.assertEqual(slice_map["bold"].foreground().color().name(), dim_color)
 
         self.assertIn("italic", slice_map)
@@ -431,7 +431,7 @@ class TestTouchpadAndCheckboxHover(unittest.TestCase):
             slice_map_uncheck[text_slice] = r.format
 
         self.assertIn("bold", slice_map_uncheck)
-        self.assertEqual(slice_map_uncheck["bold"].fontWeight(), QFont.Weight.Bold)
+        self.assertEqual(slice_map_uncheck["bold"].fontWeight(), QFont.Weight.DemiBold)
         self.assertEqual(slice_map_uncheck["bold"].foreground().color().name(), "#ffffff")
 
         self.assertIn("italic", slice_map_uncheck)

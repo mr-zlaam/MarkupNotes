@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional, Tuple, Union
+from typing import Callable, Optional, Tuple, Union
 
 from PyQt6.QtCore import QSize, Qt
 from PyQt6.QtGui import QColor, QIcon, QKeyEvent
@@ -45,8 +45,11 @@ class ModernInputDialog(QDialog):
         default_text: str = "",
         confirm_text: str = "Create",
         icon_type: Optional[Union[str, QIcon]] = None,
+        validator: Optional[Callable[[str], Tuple[bool, Optional[str], Optional[str]]]] = None,
+        max_length: Optional[int] = None,
     ) -> None:
         super().__init__(parent)
+        self.validator = validator
         self.setWindowTitle(title)
         self.setFixedWidth(420)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint)
@@ -175,9 +178,21 @@ class ModernInputDialog(QDialog):
         # Input field
         self.input_field = QLineEdit(parent=self)
         self.input_field.setObjectName("ModernInput")
+        if max_length is not None and max_length > 0:
+            self.input_field.setMaxLength(max_length)
         self.input_field.setText(default_text)
         self.input_field.returnPressed.connect(self.accept)
         layout.addWidget(self.input_field)
+
+        # Error label for real-time validation feedback
+        self.error_label = QLabel(parent=self)
+        self.error_label.setObjectName("InputErrorLabel")
+        self.error_label.setStyleSheet("color: #ff453a; font-size: 12px; margin-top: 1px;")
+        self.error_label.setWordWrap(True)
+        self.error_label.hide()
+        layout.addWidget(self.error_label)
+
+        self.input_field.textChanged.connect(self._on_input_text_changed)
 
         # Buttons
         btn_layout = QHBoxLayout()
@@ -198,6 +213,43 @@ class ModernInputDialog(QDialog):
 
         layout.addLayout(btn_layout)
 
+        # Initial validation state
+        self._on_input_text_changed(default_text)
+
+    def _on_input_text_changed(self, text: str) -> None:
+        """Validate input text in real time if a validator is configured."""
+        if self.validator is None:
+            self.ok_btn.setEnabled(bool(text.strip()))
+            return
+
+        stripped = text.strip()
+        if not stripped:
+            self.error_label.hide()
+            self.ok_btn.setEnabled(False)
+            return
+
+        is_valid, _, err_msg = self.validator(text)
+        if not is_valid:
+            short_msg = err_msg.split("\n")[0] if err_msg else "Invalid input"
+            self.error_label.setText(short_msg)
+            self.error_label.show()
+            self.ok_btn.setEnabled(False)
+        else:
+            self.error_label.hide()
+            self.ok_btn.setEnabled(True)
+
+    def accept(self) -> None:
+        """Validate on submission before accepting."""
+        if self.validator is not None:
+            is_valid, _, err_msg = self.validator(self.input_field.text())
+            if not is_valid:
+                short_msg = err_msg.split("\n")[0] if err_msg else "Invalid input"
+                self.error_label.setText(short_msg)
+                self.error_label.show()
+                self.ok_btn.setEnabled(False)
+                return
+        super().accept()
+
     @classmethod
     def get_text(
         cls,
@@ -207,6 +259,8 @@ class ModernInputDialog(QDialog):
         default: str = "",
         confirm_text: str = "Create",
         icon_type: Optional[Union[str, QIcon]] = None,
+        validator: Optional[Callable[[str], Tuple[bool, Optional[str], Optional[str]]]] = None,
+        max_length: Optional[int] = None,
     ) -> Tuple[str, bool]:
         """Show modern input dialog and return (text, accepted)."""
         dlg = cls(
@@ -216,6 +270,8 @@ class ModernInputDialog(QDialog):
             default_text=default,
             confirm_text=confirm_text,
             icon_type=icon_type,
+            validator=validator,
+            max_length=max_length,
         )
         dlg.input_field.setFocus()
         if default:

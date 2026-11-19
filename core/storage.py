@@ -34,6 +34,12 @@ class StorageManager:
         self, folder_name: str, parent_folder: Optional[Path] = None
     ) -> Optional[Path]:
         """Create a new folder under root_dir or under a specified parent folder."""
+        from utils.file_validator import validate_folder_name
+
+        is_valid, _, _ = validate_folder_name(folder_name)
+        if not is_valid:
+            return None
+
         safe_name = self.sanitize_filename(folder_name)
         if not safe_name:
             return None
@@ -174,6 +180,12 @@ class StorageManager:
 
     def rename_folder(self, folder_path: Path, new_name: str) -> Optional[Path]:
         """Rename a folder."""
+        from utils.file_validator import validate_folder_name
+
+        is_valid, _, _ = validate_folder_name(new_name)
+        if not is_valid:
+            return None
+
         safe_name = self.sanitize_filename(new_name)
         if not safe_name:
             return None
@@ -223,8 +235,10 @@ class StorageManager:
 
     @staticmethod
     def sanitize_filename(name: str) -> str:
-        """Remove invalid filesystem characters from a string."""
+        """Remove invalid filesystem characters and leading dots from a string."""
         # Replace slashes, colons, null bytes, backslashes
         cleaned = re.sub(r'[/\\:*?"<>|\x00]', "", name).strip()
+        # Remove leading dots to prevent creating hidden files or directories
+        cleaned = cleaned.lstrip(".")
         # Cap length to 100 characters for safety
         return cleaned[:100].strip()

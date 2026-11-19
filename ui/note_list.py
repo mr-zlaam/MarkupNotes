@@ -448,7 +448,7 @@ class NoteListPanel(QWidget):
 
                 action = menu.exec(self.list_widget.viewport().mapToGlobal(pos))
                 if action == new_note_act:
-                    self.new_note_requested.emit()
+                    self.create_note_requested.emit()
                 elif action == select_act:
                     self.enter_selection_mode()
             return
