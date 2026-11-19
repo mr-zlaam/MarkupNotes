@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import (
 
 from ui.context_menu import ModernContextMenu
 from ui.dialogs import ModernColorDialog, ModernInputDialog
+from utils.file_validator import MAX_FOLDER_NAME_LENGTH, validate_folder_name
 from utils.icons import (
     PRESET_COLORS,
     create_all_notes_icon,
@@ -400,6 +401,8 @@ class FolderSidebar(QWidget):
                     "New Subfolder",
                     f"Create subfolder inside '{folder.name}':",
                     icon_type="folder",
+                    validator=validate_folder_name,
+                    max_length=MAX_FOLDER_NAME_LENGTH,
                 )
                 if ok and subfolder_name.strip():
                     self.create_folder_requested.emit(subfolder_name.strip(), folder)
@@ -578,7 +581,14 @@ class FolderSidebar(QWidget):
             title = f"New Subfolder inside '{current_folder.name}'"
             prompt = f"Enter subfolder name for '{current_folder.name}':"
 
-        folder_name, ok = ModernInputDialog.get_text(self, title, prompt, icon_type="folder")
+        folder_name, ok = ModernInputDialog.get_text(
+            self,
+            title,
+            prompt,
+            icon_type="folder",
+            validator=validate_folder_name,
+            max_length=MAX_FOLDER_NAME_LENGTH,
+        )
         if ok and folder_name.strip():
             self.create_folder_requested.emit(
                 folder_name.strip(), None if force_root else current_folder

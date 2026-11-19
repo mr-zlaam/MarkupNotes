@@ -289,6 +289,31 @@ class TestFolderIconsAndContextMenus(unittest.TestCase):
 
         note_list.deleteLater()
 
+    def test_note_list_empty_area_context_menu_new_note(self) -> None:
+        """Verify right-clicking empty space in NoteListPanel emits create_note_requested."""
+        from unittest.mock import patch
+
+        note_list = NoteListPanel(parent=None)
+        note_list.resize(300, 400)
+        note_list.show()
+
+        emitted = []
+        note_list.create_note_requested.connect(lambda: emitted.append(True))
+
+        with patch.object(ModernContextMenu, "exec") as mock_exec:
+            def fake_exec(*args, **kwargs):
+                for child in note_list.findChildren(ModernContextMenu):
+                    for act in child.actions():
+                        if act.text() == "New Note":
+                            return act
+                return None
+
+            mock_exec.side_effect = fake_exec
+            note_list._on_context_menu(QPoint(100, 200))
+
+        self.assertEqual(len(emitted), 1)
+        note_list.deleteLater()
+
 
 if __name__ == "__main__":
     unittest.main()

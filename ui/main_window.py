@@ -17,7 +17,7 @@ from ui.dialogs import ModernConfirmDialog, ModernInputDialog, ModernMessageDial
 from ui.editor import EditorPanel
 from ui.note_list import NoteListPanel
 from ui.sidebar import FolderSidebar
-from utils.file_validator import validate_markdown_file
+from utils.file_validator import MAX_FOLDER_NAME_LENGTH, validate_folder_name, validate_markdown_file
 
 ZOOM_STEPS: tuple[float, ...] = (0.75, 0.85, 0.9, 1.0, 1.1, 1.25, 1.4, 1.6, 1.8, 2.0)
 
@@ -611,6 +611,15 @@ class MainWindow(QMainWindow):
     def _on_create_folder(
         self, folder_name: str, parent_folder: Optional[Path] = None
     ) -> None:
+        is_valid, err_title, err_msg = validate_folder_name(folder_name)
+        if not is_valid:
+            ModernMessageDialog.show_error(
+                self,
+                err_title or "Invalid Folder Name",
+                err_msg or "Please enter a valid folder name.",
+            )
+            return
+
         safe_name = self.storage.sanitize_filename(folder_name)
         if not safe_name:
             ModernMessageDialog.show_error(
@@ -760,8 +769,19 @@ class MainWindow(QMainWindow):
             default=folder_path.name,
             confirm_text="Rename",
             icon_type="rename",
+            validator=validate_folder_name,
+            max_length=MAX_FOLDER_NAME_LENGTH,
         )
         if ok and new_name and new_name != folder_path.name:
+            is_valid, err_title, err_msg = validate_folder_name(new_name)
+            if not is_valid:
+                ModernMessageDialog.show_error(
+                    self,
+                    err_title or "Invalid Folder Name",
+                    err_msg or "Please enter a valid folder name.",
+                )
+                return
+
             safe_name = self.storage.sanitize_filename(new_name)
             if not safe_name:
                 ModernMessageDialog.show_error(

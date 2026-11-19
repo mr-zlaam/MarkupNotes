@@ -18,8 +18,82 @@ ALLOWED_EXTENSIONS: Set[str] = {
 # Maximum supported file size (50 MB) to protect against memory exhaustion
 MAX_FILE_SIZE_BYTES: int = 50 * 1024 * 1024
 
+# Maximum supported folder name length to avoid filesystem issues and sidebar truncation
+MAX_FOLDER_NAME_LENGTH: int = 50
+
+# Forbidden filesystem characters in folder names
+INVALID_FILENAME_CHARS: Set[str] = set('/\\:*?"<>|\x00')
+
+# Cross-platform / Windows reserved device names
+RESERVED_DEVICE_NAMES: Set[str] = {
+    "con", "prn", "aux", "nul",
+    "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9",
+    "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+}
+
 # Chunk size for binary content probing
 PROBE_CHUNK_SIZE: int = 8192
+
+
+def validate_folder_name(name: str) -> Tuple[bool, Optional[str], Optional[str]]:
+    """Validate a folder name for creation or renaming.
+
+    Returns:
+        A tuple of (is_valid, error_title, error_message).
+        If is_valid is True, error_title and error_message are None.
+    """
+    if not name or not name.strip():
+        return (
+            False,
+            "Invalid Folder Name",
+            "Folder name cannot be empty. Please enter a valid name.",
+        )
+
+    stripped = name.strip()
+
+    # 1. Reject hidden folders (starting with dot)
+    if stripped.startswith("."):
+        return (
+            False,
+            "Hidden Folder Not Allowed",
+            "Folder names cannot start with a dot '.' because hidden folders are not displayed in the editor.",
+        )
+
+    # 2. Reject trailing dots
+    if stripped.endswith("."):
+        return (
+            False,
+            "Invalid Folder Name",
+            "Folder names cannot end with a dot '.'.",
+        )
+
+    # 3. Reject overly long names
+    if len(stripped) > MAX_FOLDER_NAME_LENGTH:
+        return (
+            False,
+            "Folder Name Too Long",
+            f"Folder name is too long ({len(stripped)} characters). Please keep it to {MAX_FOLDER_NAME_LENGTH} characters or fewer.",
+        )
+
+    # 4. Reject forbidden filesystem characters
+    invalid_found = [c for c in stripped if c in INVALID_FILENAME_CHARS or ord(c) < 32]
+    if invalid_found:
+        unique_invalid = "".join(sorted(set(invalid_found)))
+        return (
+            False,
+            "Invalid Characters",
+            f"Folder name contains forbidden characters ({unique_invalid}). Names cannot contain slashes (/ \\), colons (:), quotes (\"), or wildcards (* ? < > |).",
+        )
+
+    # 5. Reject reserved device names
+    if stripped.lower() in RESERVED_DEVICE_NAMES:
+        return (
+            False,
+            "Reserved Name",
+            f"'{stripped}' is a reserved system name and cannot be used as a folder name.",
+        )
+
+    return (True, None, None)
 
 
 def validate_markdown_file(path: Path) -> Tuple[bool, Optional[str], Optional[str]]:
