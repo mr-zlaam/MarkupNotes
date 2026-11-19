@@ -62,6 +62,20 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.4.0" date="2026-11-19">
+      <description>
+        <p>New Features:</p>
+        <ul>
+          <li>Added interactive YouTube video preview cards with background thumbnail caching for standard links, shortened URLs, and HTML iframe embeds.</li>
+        </ul>
+        <p>Bug Fixes and Improvements:</p>
+        <ul>
+          <li>Added folder name validation to disallow hidden folders and enforce character length limits.</li>
+          <li>Calibrated code editor line heights to eliminate trailing vertical gaps.</li>
+          <li>Refined bold text font weight to DemiBold for cleaner visual balance and readability.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.3.0" date="2026-11-19">
       <description>
         <p>New Features:</p>
