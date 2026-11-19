@@ -191,3 +191,144 @@ def transform_line_block_prefix(line_text: str, new_prefix: str) -> str:
         target_prefix = target_prefix.replace("[ ]", "[x]")
 
     return f"{indent}{target_prefix}{core_text}"
+
+
+STRUCTURAL_PREFIX_PATTERN = re.compile(
+    r"^(\s*(?:>+\s*)*(?:[-*+]\s*\[[ xX]?\]\s*|[-*+]\s+|\d+[\.\)]\s+|#{1,6}\s+))(.*)$"
+)
+
+SPAN_COLOR_TAG_PATTERN = re.compile(
+    r"^<{0,1}span\s+style=[\"']color:\s*([#a-zA-Z0-9]+);?[\"']>(.*?)</{0,1}span>$",
+    re.DOTALL | re.IGNORECASE,
+)
+
+MARK_COLOR_TAG_PATTERN = re.compile(
+    r"^<{0,1}mark(?:\s+style=[\"']background(?:-color)?:\s*([#a-zA-Z0-9]+);?[\"'])?>(.*?)</{0,1}mark>$",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def expand_selection_to_color_tags(
+    doc_text: str,
+    start: int,
+    end: int,
+    tag_kind: str,
+) -> tuple[int, int]:
+    """Expand selection bounds to enclose any immediately adjacent or enclosing color tags."""
+    if tag_kind == "mark":
+        open_pat = re.compile(r"<{0,1}mark(?:\s+style=[^>]+)?>", re.IGNORECASE)
+        close_pat = re.compile(r"</{0,1}mark>", re.IGNORECASE)
+    else:
+        open_pat = re.compile(r"<{0,1}span(?:\s+style=[\"']color:[^>]+[\"'])?>", re.IGNORECASE)
+        close_pat = re.compile(r"</{0,1}span>", re.IGNORECASE)
+
+    new_start = start
+    new_end = end
+
+    for m in open_pat.finditer(doc_text[:start]):
+        if m.end() == start or m.start() <= start < m.end():
+            new_start = m.start()
+            break
+
+    for m in close_pat.finditer(doc_text[end:]):
+        if m.start() == 0 or m.start() <= 0 < m.end():
+            new_end = end + m.end()
+            break
+
+    return new_start, new_end
+
+
+def _format_single_line_text_color(line: str, color: str) -> str:
+    """Apply, change, or remove text color on a single line, preserving list/checkbox prefixes."""
+    if not line.strip():
+        return line
+
+    line_trailing_ws = ""
+    while line and line[-1] in (" ", "\t"):
+        line_trailing_ws = line[-1] + line_trailing_ws
+        line = line[:-1]
+
+    struct_match = STRUCTURAL_PREFIX_PATTERN.match(line)
+    lead_prefix = struct_match.group(1) if struct_match else ""
+    core_text = struct_match.group(2) if struct_match else line
+
+    # Always strip all existing text color spans within the core selection
+    cleaned_core = re.sub(
+        r"<{0,1}/?span(?:\s+style=[\"']color:[^>]+[\"'])?>",
+        "",
+        core_text,
+        flags=re.IGNORECASE,
+    )
+
+    if not color:
+        # Default / Reset: return clean text without color tags
+        formatted_core = cleaned_core
+    else:
+        # Check if the selection was already uniformly colored with the exact same color -> toggle off
+        m = SPAN_COLOR_TAG_PATTERN.match(core_text.strip())
+        if m and m.group(1).lower() == color.lower():
+            formatted_core = cleaned_core
+        else:
+            formatted_core = f'<span style="color: {color};">{cleaned_core}</span>'
+
+    return f"{lead_prefix}{formatted_core}{line_trailing_ws}"
+
+
+def apply_text_color_to_markdown(text: str, color: str) -> str:
+    """Apply, change, or remove inline text color across single or multiple selected lines."""
+    parts = re.split(r"(\r?\n|\u2029)", text)
+    formatted_parts = []
+    for p in parts:
+        if p in ("\n", "\r\n", "\u2029"):
+            formatted_parts.append("\n")
+        else:
+            formatted_parts.append(_format_single_line_text_color(p, color))
+    return "".join(formatted_parts)
+
+
+def _format_single_line_highlight_color(line: str, color: str) -> str:
+    """Apply, change, or remove background highlight on a single line, preserving prefixes."""
+    if not line.strip():
+        return line
+
+    line_trailing_ws = ""
+    while line and line[-1] in (" ", "\t"):
+        line_trailing_ws = line[-1] + line_trailing_ws
+        line = line[:-1]
+
+    struct_match = STRUCTURAL_PREFIX_PATTERN.match(line)
+    lead_prefix = struct_match.group(1) if struct_match else ""
+    core_text = struct_match.group(2) if struct_match else line
+
+    # Always strip all existing mark tags within the core selection
+    cleaned_core = re.sub(
+        r"<{0,1}/?mark(?:\s+style=[^>]+)?>",
+        "",
+        core_text,
+        flags=re.IGNORECASE,
+    )
+
+    if not color:
+        # None / Reset: return clean text without highlight tags
+        formatted_core = cleaned_core
+    else:
+        # Check if the selection was already uniformly highlighted with the exact same color -> toggle off
+        m = MARK_COLOR_TAG_PATTERN.match(core_text.strip())
+        if m and (m.group(1) or "#ffd60a").lower() == color.lower():
+            formatted_core = cleaned_core
+        else:
+            formatted_core = f'<mark style="background-color: {color};">{cleaned_core}</mark>'
+
+    return f"{lead_prefix}{formatted_core}{line_trailing_ws}"
+
+
+def apply_highlight_color_to_markdown(text: str, color: str) -> str:
+    """Apply, change, or remove inline background highlight across single or multiple selected lines."""
+    parts = re.split(r"(\r?\n|\u2029)", text)
+    formatted_parts = []
+    for p in parts:
+        if p in ("\n", "\r\n", "\u2029"):
+            formatted_parts.append("\n")
+        else:
+            formatted_parts.append(_format_single_line_highlight_color(p, color))
+    return "".join(formatted_parts)

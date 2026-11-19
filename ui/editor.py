@@ -74,7 +74,10 @@ from utils.code_engine import (
 )
 from utils.markdown import (
     CHECKBOX_PATTERN,
+    apply_highlight_color_to_markdown,
+    apply_text_color_to_markdown,
     calculate_block_hanging_indent,
+    expand_selection_to_color_tags,
     find_link_at_offset,
     get_auto_continue_prefix,
     get_checkbox_info,
@@ -266,6 +269,8 @@ class MarkdownEditor(QTextEdit):
         # Floating text format bubble toolbar (Notion-style inline formatting)
         self.format_toolbar = SelectionFormatToolbar(self)
         self.format_toolbar.format_requested.connect(self._apply_text_format)
+        self.format_toolbar.text_color_requested.connect(self._apply_text_color)
+        self.format_toolbar.highlight_color_requested.connect(self._apply_highlight_color)
         self.selectionChanged.connect(self._on_selection_changed)
 
         # In-note search & replace state
@@ -655,6 +660,74 @@ class MarkdownEditor(QTextEdit):
                 new_cursor.setPosition(start + len(formatted), QTextCursor.MoveMode.KeepAnchor)
                 self.setTextCursor(new_cursor)
 
+        cursor.endEditBlock()
+        self.viewport().update()
+        if self.textCursor().hasSelection():
+            self._show_format_toolbar()
+
+    def _apply_text_color(self, color: str) -> None:
+        """Apply, change, or remove inline text color across single or multi-line selections."""
+        cursor = self.textCursor()
+        if not cursor.hasSelection():
+            return
+
+        start = cursor.selectionStart()
+        end = cursor.selectionEnd()
+
+        doc_text = self.document().toPlainText()
+        new_start, new_end = expand_selection_to_color_tags(doc_text, start, end, "span")
+        if (new_start, new_end) != (start, end):
+            cursor.setPosition(new_start)
+            cursor.setPosition(new_end, QTextCursor.MoveMode.KeepAnchor)
+            self.setTextCursor(cursor)
+            start = new_start
+
+        text = self.textCursor().selectedText()
+        if not text:
+            return
+
+        formatted = apply_text_color_to_markdown(text, color)
+
+        cursor.beginEditBlock()
+        cursor.insertText(formatted)
+        new_cursor = self.textCursor()
+        new_cursor.setPosition(start)
+        new_cursor.setPosition(start + len(formatted), QTextCursor.MoveMode.KeepAnchor)
+        self.setTextCursor(new_cursor)
+        cursor.endEditBlock()
+        self.viewport().update()
+        if self.textCursor().hasSelection():
+            self._show_format_toolbar()
+
+    def _apply_highlight_color(self, color: str) -> None:
+        """Apply, change, or remove inline background highlight across single or multi-line selections."""
+        cursor = self.textCursor()
+        if not cursor.hasSelection():
+            return
+
+        start = cursor.selectionStart()
+        end = cursor.selectionEnd()
+
+        doc_text = self.document().toPlainText()
+        new_start, new_end = expand_selection_to_color_tags(doc_text, start, end, "mark")
+        if (new_start, new_end) != (start, end):
+            cursor.setPosition(new_start)
+            cursor.setPosition(new_end, QTextCursor.MoveMode.KeepAnchor)
+            self.setTextCursor(cursor)
+            start = new_start
+
+        text = self.textCursor().selectedText()
+        if not text:
+            return
+
+        formatted = apply_highlight_color_to_markdown(text, color)
+
+        cursor.beginEditBlock()
+        cursor.insertText(formatted)
+        new_cursor = self.textCursor()
+        new_cursor.setPosition(start)
+        new_cursor.setPosition(start + len(formatted), QTextCursor.MoveMode.KeepAnchor)
+        self.setTextCursor(new_cursor)
         cursor.endEditBlock()
         self.viewport().update()
         if self.textCursor().hasSelection():
@@ -1227,6 +1300,30 @@ class MarkdownEditor(QTextEdit):
         new_block = cursor.block()
         new_block_num = new_block.blockNumber()
         new_pos_in_block = cursor.positionInBlock()
+
+        # Prevent caret from ever resting strictly inside invisible HTML color/mark tags
+        if not cursor.hasSelection():
+            b_text = new_block.text()
+            if "<" in b_text or "mark" in b_text or "span" in b_text:
+                # Remove empty tag pairs automatically
+                empty_m = re.search(r"<{0,1}(?:mark|span|u)[^>]*>\s*</{0,1}(?:mark|span|u)>", b_text, re.IGNORECASE)
+                if empty_m:
+                    es, ee = empty_m.span()
+                    clean_c = QTextCursor(self.document())
+                    clean_c.setPosition(new_block.position() + es)
+                    clean_c.setPosition(new_block.position() + ee, QTextCursor.MoveMode.KeepAnchor)
+                    clean_c.removeSelectedText()
+                    b_text = new_block.text()
+                    new_pos_in_block = self.textCursor().positionInBlock()
+
+                for tm in re.finditer(r"<{0,1}(?:mark|span|u|/mark|/span|/u)[^>]*>", b_text, re.IGNORECASE):
+                    ts, te = tm.span()
+                    if ts < new_pos_in_block < te:
+                        target_p = te if (new_pos_in_block - ts >= te - new_pos_in_block) else ts
+                        snap_c = QTextCursor(cursor)
+                        snap_c.setPosition(new_block.position() + target_p)
+                        self.setTextCursor(snap_c)
+                        return
 
         old_block_num = self.highlighter.active_block_number
         old_pos_in_block = getattr(self.highlighter, "cursor_pos_in_block", -1)
@@ -2716,6 +2813,91 @@ class MarkdownEditor(QTextEdit):
             cursor.endEditBlock()
             self.viewport().update()
             return
+
+        # Atomically skip cursor across hidden HTML color/mark tags
+        if not cursor.hasSelection() and event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Right):
+            if not (event.modifiers() & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier | Qt.KeyboardModifier.ShiftModifier)):
+                if "<" in line_text or "mark" in line_text or "span" in line_text:
+                    if event.key() == Qt.Key.Key_Right:
+                        for tm in re.finditer(r"<{0,1}(?:mark|span|u|/mark|/span|/u)[^>]*>", line_text, re.IGNORECASE):
+                            ts, te = tm.span()
+                            if pos_in_block == ts:
+                                new_c = QTextCursor(cursor)
+                                new_c.setPosition(block.position() + te)
+                                self.setTextCursor(new_c)
+                                event.accept()
+                                return
+                    elif event.key() == Qt.Key.Key_Left:
+                        for tm in re.finditer(r"<{0,1}(?:mark|span|u|/mark|/span|/u)[^>]*>", line_text, re.IGNORECASE):
+                            ts, te = tm.span()
+                            if pos_in_block == te:
+                                new_c = QTextCursor(cursor)
+                                new_c.setPosition(block.position() + ts)
+                                self.setTextCursor(new_c)
+                                event.accept()
+                                return
+
+        # Protect hidden HTML tags against accidental character deletion on Backspace or Delete
+        if not cursor.hasSelection():
+            if "<" in line_text or "mark" in line_text or "span" in line_text:
+                if event.key() == Qt.Key.Key_Backspace:
+                    tags = list(re.finditer(r"<{0,1}(?:mark|span|u|/mark|/span|/u)[^>]*>", line_text, re.IGNORECASE))
+                    for tm in tags:
+                        ts, te = tm.span()
+                        is_closing = tm.group().startswith(("</", "/"))
+                        if not is_closing and pos_in_block == te:
+                            # Caret is at start of colored text -> delete character before opening tag
+                            if ts > 0:
+                                cursor.beginEditBlock()
+                                del_c = QTextCursor(self.document())
+                                del_c.setPosition(block.position() + ts - 1)
+                                del_c.setPosition(block.position() + ts, QTextCursor.MoveMode.KeepAnchor)
+                                del_c.removeSelectedText()
+                                cursor.endEditBlock()
+                                self.viewport().update()
+                                event.accept()
+                                return
+                        elif is_closing and pos_in_block == te:
+                            # Caret is after closing tag -> delete the last character of colored content
+                            if ts > 0:
+                                cursor.beginEditBlock()
+                                del_c = QTextCursor(self.document())
+                                del_c.setPosition(block.position() + ts - 1)
+                                del_c.setPosition(block.position() + ts, QTextCursor.MoveMode.KeepAnchor)
+                                del_c.removeSelectedText()
+                                cursor.endEditBlock()
+                                self.viewport().update()
+                                event.accept()
+                                return
+                elif event.key() == Qt.Key.Key_Delete:
+                    tags = list(re.finditer(r"<{0,1}(?:mark|span|u|/mark|/span|/u)[^>]*>", line_text, re.IGNORECASE))
+                    for tm in tags:
+                        ts, te = tm.span()
+                        is_closing = tm.group().startswith(("</", "/"))
+                        if not is_closing and pos_in_block == ts:
+                            # Caret is before opening tag -> delete the first character of colored content
+                            if te < len(line_text):
+                                cursor.beginEditBlock()
+                                del_c = QTextCursor(self.document())
+                                del_c.setPosition(block.position() + te)
+                                del_c.setPosition(block.position() + te + 1, QTextCursor.MoveMode.KeepAnchor)
+                                del_c.removeSelectedText()
+                                cursor.endEditBlock()
+                                self.viewport().update()
+                                event.accept()
+                                return
+                        elif is_closing and pos_in_block == ts:
+                            # Caret is at end of colored content -> delete character after closing tag
+                            if te < len(line_text):
+                                cursor.beginEditBlock()
+                                del_c = QTextCursor(self.document())
+                                del_c.setPosition(block.position() + te)
+                                del_c.setPosition(block.position() + te + 1, QTextCursor.MoveMode.KeepAnchor)
+                                del_c.removeSelectedText()
+                                cursor.endEditBlock()
+                                self.viewport().update()
+                                event.accept()
+                                return
 
         # 1. Backspace right after a checkbox or list marker removes prefix cleanly or unindents
         if event.key() == Qt.Key.Key_Backspace and not cursor.hasSelection():

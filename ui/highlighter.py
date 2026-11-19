@@ -57,8 +57,15 @@ LINK_RE = re.compile(
     r"(\[)([^\]]+)(\]\([^\s)]+\))|(<)((?:https?|ftp)://[^\s>]+)(>)|((?:https?|ftp)://[^\s<>\)\]`]+)"
 )
 TAG_RE = re.compile(r"(?:^|(?<=\s))(#[\w\d_-]+)")
-HTML_U_RE = re.compile(r"(<u>)(.+?)(</u>)", re.IGNORECASE)
-HTML_MARK_RE = re.compile(r"(<mark>)(.+?)(</mark>)", re.IGNORECASE)
+HTML_U_RE = re.compile(r"(<{0,1}u>)(.+?)(</{0,1}u>)", re.IGNORECASE)
+HTML_MARK_RE = re.compile(
+    r"(<{0,1}mark(?:\s+style=[\"']background(?:-color)?:\s*([#a-zA-Z0-9]+);?[\"'])?>)(.+?)(</{0,1}mark>)",
+    re.IGNORECASE,
+)
+HTML_SPAN_COLOR_RE = re.compile(
+    r"(<{0,1}span\s+style=[\"']color:\s*([#a-zA-Z0-9]+);?[\"']>)(.+?)(</{0,1}span>)",
+    re.IGNORECASE,
+)
 HTML_KBD_RE = re.compile(r"(<kbd>)(.+?)(</kbd>)", re.IGNORECASE)
 
 
@@ -105,12 +112,16 @@ class MarkdownHighlighter(QSyntaxHighlighter):
             self.ordered_list_space_format.setFontLetterSpacing(round(14.0 * self._ui_scale, 1))
         if hasattr(self, "checkbox_x_format"):
             self._update_checkbox_x_format()
+        if hasattr(self, "hidden_format"):
+            self.hidden_format.setFontLetterSpacing(round(-0.5 * self._ui_scale, 2))
 
     def _init_formats(self) -> None:
         # Format used to collapse and hide markdown syntax markers on inactive lines
         self.hidden_format = QTextCharFormat()
         self.hidden_format.setFontPointSize(1)
         self.hidden_format.setForeground(QColor(0, 0, 0, 0))
+        self.hidden_format.setFontLetterSpacingType(QFont.SpacingType.AbsoluteSpacing)
+        self.hidden_format.setFontLetterSpacing(-0.5)
 
         # Transparent format preserving normal line height (used for inactive tables)
         self.transparent_line_format = QTextCharFormat()
@@ -676,23 +687,49 @@ class MarkdownHighlighter(QSyntaxHighlighter):
                 if is_checked:
                     fmt.setForeground(dim_color)
                 self._format(text, g2_s, g2_e - g2_s, fmt)
-                syn_fmt = self.marker_format if is_active else self.hidden_format
-                self._format(text, g1_s, g1_e - g1_s, syn_fmt)
-                self._format(text, g3_s, g3_e - g3_s, syn_fmt)
+                self._format(text, g1_s, g1_e - g1_s, self.hidden_format)
+                self._format(text, g3_s, g3_e - g3_s, self.hidden_format)
 
             for m in HTML_MARK_RE.finditer(text):
                 g1_s, g1_e = m.span(1)
-                g2_s, g2_e = m.span(2)
+                custom_bg = m.group(2)
                 g3_s, g3_e = m.span(3)
-                fmt = QTextCharFormat(self.mark_format)
+                g4_s, g4_e = m.span(4)
+                u16_start = len(text[:g3_s].encode("utf-16-le")) // 2 if g3_s > 0 else 0
+                existing = self.format(u16_start)
+                fmt = QTextCharFormat(existing)
+                bg_color = QColor(custom_bg) if custom_bg else self.mark_format.background().color()
+                if bg_color.isValid():
+                    fmt.setBackground(bg_color)
+                    if not existing.foreground().isOpaque():
+                        if bg_color.lightness() < 128:
+                            fmt.setForeground(QColor("#ffffff"))
+                        else:
+                            fmt.setForeground(QColor("#111111"))
                 if base_point_size:
                     fmt.setFontPointSize(base_point_size)
                 if is_checked:
                     fmt.setForeground(dim_color)
-                self._format(text, g2_s, g2_e - g2_s, fmt)
-                syn_fmt = self.marker_format if is_active else self.hidden_format
-                self._format(text, g1_s, g1_e - g1_s, syn_fmt)
-                self._format(text, g3_s, g3_e - g3_s, syn_fmt)
+                self._format(text, g3_s, g3_e - g3_s, fmt)
+                self._format(text, g1_s, g1_e - g1_s, self.hidden_format)
+                self._format(text, g4_s, g4_e - g4_s, self.hidden_format)
+
+            for m in HTML_SPAN_COLOR_RE.finditer(text):
+                g1_s, g1_e = m.span(1)
+                color_hex = m.group(2)
+                g3_s, g3_e = m.span(3)
+                g4_s, g4_e = m.span(4)
+                u16_start = len(text[:g3_s].encode("utf-16-le")) // 2 if g3_s > 0 else 0
+                existing = self.format(u16_start)
+                fmt = QTextCharFormat(existing)
+                c = QColor(color_hex)
+                if c.isValid():
+                    fmt.setForeground(c if not is_checked else dim_color)
+                if base_point_size:
+                    fmt.setFontPointSize(base_point_size)
+                self._format(text, g3_s, g3_e - g3_s, fmt)
+                self._format(text, g1_s, g1_e - g1_s, self.hidden_format)
+                self._format(text, g4_s, g4_e - g4_s, self.hidden_format)
 
             for m in HTML_KBD_RE.finditer(text):
                 g1_s, g1_e = m.span(1)
@@ -811,10 +848,19 @@ class MarkdownHighlighter(QSyntaxHighlighter):
                                 break
                     self._format(text, raw_start, raw_len, fmt)
 
-        # Tags: #tag (not headings)
+        # Tags: #tag (not headings and not inside HTML tags)
         if "#" in text and not base_point_size:
+            html_tag_spans = []
+            for tm in re.finditer(r"<{0,1}(?:mark|span|u|b|i|strong|em|code)[^>]*>", text, re.IGNORECASE):
+                html_tag_spans.append(tm.span())
+            if "<" in text and ">" in text:
+                for tm in re.finditer(r"<[^>]+>", text):
+                    html_tag_spans.append(tm.span())
+
             for m in TAG_RE.finditer(text):
                 start, end = m.span(1)
+                if any(ts <= start and end <= te for ts, te in html_tag_spans):
+                    continue
                 if is_checked:
                     fmt = QTextCharFormat(self.tag_format)
                     fmt.setForeground(dim_color)

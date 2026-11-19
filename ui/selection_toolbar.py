@@ -16,15 +16,19 @@ from PyQt6.QtWidgets import (
 from utils.icons import (
     create_bullet_list_icon,
     create_checkbox_icon,
+    create_chevron_icon,
     create_link_icon,
     create_number_list_icon,
 )
+from ui.color_popup import ColorPickerPopup
 
 
 class SelectionFormatToolbar(QFrame):
     """Floating pill toolbar anchored directly above highlighted/selected text."""
 
     format_requested = pyqtSignal(str)  # Emits format key: "bold", "italic", "strike", "underline", "link", "code"
+    text_color_requested = pyqtSignal(str)  # Emits hex code or ""
+    highlight_color_requested = pyqtSignal(str)  # Emits hex code or ""
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -186,10 +190,46 @@ class SelectionFormatToolbar(QFrame):
         self.code_btn.clicked.connect(lambda: self.format_requested.emit("code"))
         layout.addWidget(self.code_btn)
 
+        # Divider 3
+        divider3 = QFrame(parent=self)
+        divider3.setObjectName("VDivider")
+        divider3.setFrameShape(QFrame.Shape.VLine)
+        layout.addWidget(divider3)
+
+        # 9. Chevron / Color Picker Button
+        self.chevron_btn = QPushButton(parent=self)
+        self.chevron_btn.setObjectName("FormatBtn")
+        self.chevron_btn.setToolTip("Text & Highlight Color")
+        self.chevron_btn.setIcon(create_chevron_icon("down", color="#d0d0d4", size=12))
+        self.chevron_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.chevron_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.chevron_btn.clicked.connect(self._toggle_color_popup)
+        layout.addWidget(self.chevron_btn)
+
+        # Independent Text & Highlight Color Modal Popup
+        self.color_popup = ColorPickerPopup(parent=None)
+        self.color_popup.text_color_selected.connect(self.text_color_requested.emit)
+        self.color_popup.highlight_color_selected.connect(self.highlight_color_requested.emit)
+
         self.adjustSize()
+
+    def _toggle_color_popup(self) -> None:
+        """Toggle the visibility of the color picker popup anchored below the chevron."""
+        if self.color_popup.isVisible():
+            self.color_popup.hide()
+        else:
+            self.color_popup.show_below_widget(self.chevron_btn)
+
+    def hide(self) -> None:
+        """Hide toolbar and close any active color modal."""
+        if hasattr(self, "color_popup"):
+            self.color_popup.hide()
+        super().hide()
 
     def show_above_rect(self, global_rect: QRect) -> None:
         """Position and display the toolbar centered directly above the selection bounds."""
+        if hasattr(self, "color_popup") and self.color_popup.isVisible():
+            self.color_popup.hide()
         self.adjustSize()
         bar_w = self.width()
         bar_h = self.height()
