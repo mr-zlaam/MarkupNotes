@@ -277,8 +277,9 @@ class MarkdownEditor(QTextEdit):
         # UI Scaling factor (1.0 = default 100%)
         self.ui_scale: float = 1.0
 
-        # Transient auto-hiding vertical scrollbar
+        # Transient auto-hiding scrollbars (vertical & horizontal)
         self._transient_scrollbar = TransientScrollBarController(self.verticalScrollBar(), parent=self)
+        self._transient_h_scrollbar = TransientScrollBarController(self.horizontalScrollBar(), parent=self)
 
     def set_ui_scale(self, scale: float) -> None:
         """Set UI scale factor and refresh highlighter and viewport."""
@@ -343,6 +344,8 @@ class MarkdownEditor(QTextEdit):
         self.setLineWrapMode(
             QTextEdit.LineWrapMode.WidgetWidth if new_wrapped else QTextEdit.LineWrapMode.NoWrap
         )
+        if new_wrapped and hasattr(self, "_transient_h_scrollbar"):
+            self._transient_h_scrollbar.hide_immediately()
         self.word_wrap_toggled.emit(new_wrapped)
         return new_wrapped
 
@@ -3434,6 +3437,8 @@ class EditorPanel(QWidget):
             self.editor.document().setDefaultFont(font)
             mode = QTextEdit.LineWrapMode.WidgetWidth if config.editor.word_wrap else QTextEdit.LineWrapMode.NoWrap
             self.editor.setLineWrapMode(mode)
+            if config.editor.word_wrap and hasattr(self.editor, "_transient_h_scrollbar"):
+                self.editor._transient_h_scrollbar.hide_immediately()
             metrics = self.editor.fontMetrics()
             self.editor._tab_size = config.editor.tab_size
             self.editor.setTabStopDistance(float(metrics.horizontalAdvance(' ') * config.editor.tab_size))

@@ -95,11 +95,24 @@ class TestTransientScrollBar(unittest.TestCase):
 
         self.assertTrue(hasattr(editor, "_transient_scrollbar"))
         self.assertEqual(editor._transient_scrollbar.opacity, 0.0)
+        self.assertTrue(hasattr(editor, "_transient_h_scrollbar"))
+        self.assertEqual(editor._transient_h_scrollbar.opacity, 0.0)
 
         editor.setPlainText("\n".join(f"Paragraph {i} content..." for i in range(150)))
         editor.verticalScrollBar().setValue(30)
 
         self.assertEqual(editor._transient_scrollbar.opacity, 1.0)
+
+        # Test horizontal scrollbar when word wrap is disabled
+        editor.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
+        editor.setPlainText("Very long line that exceeds editor viewport width " * 50)
+        self.assertTrue(editor.horizontalScrollBar().maximum() > 0)
+        editor.horizontalScrollBar().setValue(50)
+        self.assertEqual(editor._transient_h_scrollbar.opacity, 1.0)
+
+        # Toggling word wrap back on immediately hides horizontal scrollbar
+        editor.toggle_word_wrap()
+        self.assertEqual(editor._transient_h_scrollbar.opacity, 0.0)
 
         editor.close()
         editor.deleteLater()
