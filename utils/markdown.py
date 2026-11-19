@@ -3,11 +3,74 @@
 import re
 from typing import Optional, Tuple
 
+from PyQt6.QtGui import QFont, QFontMetricsF
+
 CHECKBOX_PATTERN = re.compile(r"^(\s*)([-*+]\s*\[([ xX]?)\]\s?)(.*)$")
 LIST_PATTERN = re.compile(r"^(\s*)([-*+]|\d+\.|\d+\))(\s+)(.*)$")
+QUOTE_PATTERN = re.compile(r"^(\s*(?:>[ \t]*)+)")
 LINK_PATTERN = re.compile(
     r"\[(?P<label>[^\]]+)\]\((?P<url>[^\s)]+)\)|<(?P<autourl>https?://[^\s>]+)>|(?P<rawurl>https?://[^\s<>\)\]`]+)"
 )
+
+
+def calculate_block_hanging_indent(
+    text: str,
+    font: QFont,
+    ui_scale: float = 1.0,
+) -> Tuple[float, float]:
+    """Calculate (left_margin, text_indent) for a line of text in Markdown.
+
+    Handles:
+    - Blockquotes ("> ", ">> ")
+    - Checkboxes ("- [ ]", "* [x]", "  - [ ]", etc.)
+    - Bullet lists ("- ", "* ", "+ ", "  - ", etc.)
+    - Numbered lists ("1. ", "10. ", "  1) ", etc.)
+    - Blockquoted lists and checkboxes (e.g. "> - [ ] ")
+
+    Returns:
+        (left_margin, text_indent) as floats.
+        For normal unindented text, returns (0.0, 0.0).
+        For list/checkbox items, text_indent is negative such that:
+          first line starts at left_margin + text_indent (the indent level)
+          continuation lines wrap to left_margin (aligned with text after marker)
+    """
+    quote_margin = 0.0
+    inner_text = text
+    qm = QUOTE_PATTERN.match(text)
+    if qm:
+        prefix_q = qm.group(1)
+        level = prefix_q.count(">")
+        if level > 0:
+            quote_margin = level * 18.0 + 8.0
+        inner_text = text[len(prefix_q):]
+
+    fm = QFontMetricsF(font)
+    cb_match = CHECKBOX_PATTERN.match(inner_text)
+    if cb_match:
+        indent, prefix, _, _ = cb_match.groups()
+        indent_w = fm.horizontalAdvance(indent)
+        marker = prefix.strip()[0] if prefix.strip() else "-"
+        canonical_prefix = f"{marker} [ ] "
+        marker_w = fm.horizontalAdvance(canonical_prefix)
+        return round(quote_margin + indent_w + marker_w, 2), round(-marker_w, 2)
+
+    list_match = LIST_PATTERN.match(inner_text)
+    if list_match:
+        indent, marker, space, _ = list_match.groups()
+        indent_w = fm.horizontalAdvance(indent)
+        if marker in ("-", "*", "+"):
+            marker_w = fm.horizontalAdvance(marker + space) + len(marker + space) * round(10.0 * ui_scale, 1)
+        else:
+            bold_font = QFont(font)
+            bold_font.setWeight(QFont.Weight.Bold)
+            fm_bold = QFontMetricsF(bold_font)
+            marker_w = fm_bold.horizontalAdvance(marker) + fm.horizontalAdvance(space) + len(space) * round(14.0 * ui_scale, 1)
+        return round(quote_margin + indent_w + marker_w, 2), round(-marker_w, 2)
+
+    if quote_margin > 0.0:
+        return round(quote_margin, 2), 0.0
+
+    return 0.0, 0.0
 
 
 def find_link_at_offset(text: str, offset: int) -> Optional[Tuple[int, int, str]]:

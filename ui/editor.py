@@ -74,6 +74,7 @@ from utils.code_engine import (
 )
 from utils.markdown import (
     CHECKBOX_PATTERN,
+    calculate_block_hanging_indent,
     find_link_at_offset,
     get_auto_continue_prefix,
     get_checkbox_info,
@@ -246,12 +247,12 @@ class MarkdownEditor(QTextEdit):
         self._kinetic_vy: float = 0.0
         self._kinetic_target: Optional[tuple[str, int, float]] = None
 
-        # Debounced blockquote margin updates & atomic batch edit guard
+        # Debounced blockquote, list, and checkbox margin updates & atomic batch edit guard
         self._updating_margins: bool = False
         self._margin_timer = QTimer(self)
         self._margin_timer.setSingleShot(True)
         self._margin_timer.setInterval(50)
-        self._margin_timer.timeout.connect(self._update_blockquote_margins)
+        self._margin_timer.timeout.connect(self._update_block_margins)
 
         # Slash command palette (Notion-style block creation)
         self.slash_palette = SlashCommandPalette(self)
@@ -286,6 +287,7 @@ class MarkdownEditor(QTextEdit):
         self.ui_scale = float(scale)
         if hasattr(self, "highlighter"):
             self.highlighter.ui_scale = float(scale)
+        self._margin_timer.start()
         self.viewport().update()
 
     def _refresh_editor_style(self) -> None:
@@ -314,6 +316,7 @@ class MarkdownEditor(QTextEdit):
         metrics = self.fontMetrics()
         self.setTabStopDistance(float(metrics.horizontalAdvance(' ') * getattr(self, "_tab_size", 2)))
         self._refresh_editor_style()
+        self._margin_timer.start()
         self.viewport().update()
 
     def zoom_in(self, step: int = 1) -> None:
@@ -1135,8 +1138,8 @@ class MarkdownEditor(QTextEdit):
         card_h = header_h + top_pad + len(cr.lines) * line_h + bot_pad
         return QRectF(float(r_top.left()), float(r_top.top()), avail_w, card_h)
 
-    def _update_blockquote_margins(self) -> None:
-        """Ensure all blockquotes have leftMargin proportional to their quote nesting depth and uniform line height."""
+    def _update_block_margins(self) -> None:
+        """Ensure all blockquotes, list items, and checkboxes have hanging indents and uniform line height."""
         if self._updating_margins:
             return
         self._updating_margins = True
@@ -1145,22 +1148,26 @@ class MarkdownEditor(QTextEdit):
             b = doc.firstBlock()
             cur = QTextCursor(doc)
             cur.beginEditBlock()
+            font = self.font()
+            scale = getattr(self, "ui_scale", 1.0)
             try:
                 while b.isValid():
                     text = b.text()
                     target_margin = 0.0
-                    if ">" in text and b.userState() != 1:
-                        qm = QUOTE_RE.match(text)
-                        if qm:
-                            level = qm.group(1).count(">")
-                            if level > 0:
-                                target_margin = level * 18.0 + 8.0
+                    target_indent = 0.0
+                    if b.userState() != 1:
+                        target_margin, target_indent = calculate_block_hanging_indent(
+                            text, font, ui_scale=scale
+                        )
 
                     c = QTextCursor(b)
                     bf = c.blockFormat()
                     changed = False
                     if abs(bf.leftMargin() - target_margin) > 0.5:
                         bf.setLeftMargin(target_margin)
+                        changed = True
+                    if abs(bf.textIndent() - target_indent) > 0.5:
+                        bf.setTextIndent(target_indent)
                         changed = True
                     if abs(bf.lineHeight() - 120.0) > 0.5:
                         bf.setLineHeight(120.0, QTextBlockFormat.LineHeightTypes.ProportionalHeight.value)
@@ -1172,6 +1179,10 @@ class MarkdownEditor(QTextEdit):
                 cur.endEditBlock()
         finally:
             self._updating_margins = False
+
+    def _update_blockquote_margins(self) -> None:
+        """Backward-compatible alias for _update_block_margins."""
+        self._update_block_margins()
 
     def setPlainText(self, text: str) -> None:
         """Set editor plain text and synchronously apply line height and block margins."""
