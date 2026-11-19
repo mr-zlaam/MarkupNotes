@@ -483,8 +483,11 @@ class MarkdownEditor(QTextEdit):
         if format_type == "link":
             if not cursor.hasSelection():
                 cursor.select(QTextCursor.SelectionType.WordUnderCursor)
-                if cursor.selectedText().strip():
+                sel_t = cursor.selectedText().strip()
+                if sel_t and re.search(r"\w", sel_t):
                     self.setTextCursor(cursor)
+                else:
+                    cursor = self.textCursor()
 
             has_sel = self.textCursor().hasSelection()
             text = self.textCursor().selectedText() if has_sel else ""
@@ -562,9 +565,10 @@ class MarkdownEditor(QTextEdit):
         s_len = len(suffix)
 
         if not cursor.hasSelection():
-            # Check if cursor is already inside empty delimiter pair (e.g. **|**) -> delete it
             pos = cursor.position()
             doc_text = self.document().toPlainText()
+
+            # 1. Check if cursor is already inside empty delimiter pair (e.g. **|**) -> delete it
             if pos >= p_len and pos + s_len <= len(doc_text):
                 if doc_text[pos - p_len : pos] == prefix and doc_text[pos : pos + s_len] == suffix:
                     cursor.beginEditBlock()
@@ -576,21 +580,22 @@ class MarkdownEditor(QTextEdit):
                     self.viewport().update()
                     return
 
-            # Check if cursor is on a word: select word under cursor
-            cursor.select(QTextCursor.SelectionType.WordUnderCursor)
-            sel_word = cursor.selectedText().strip()
-            if sel_word and "\n" not in sel_word and "\r" not in sel_word:
-                self.setTextCursor(cursor)
-            else:
-                # Insert empty delimiter pair and position cursor inside
-                c = self.textCursor()
-                c.beginEditBlock()
-                c.insertText(prefix + suffix)
-                c.movePosition(QTextCursor.MoveOperation.Left, QTextCursor.MoveMode.MoveAnchor, s_len)
-                self.setTextCursor(c)
-                c.endEditBlock()
-                self.viewport().update()
+            # 2. Check if cursor is adjacent to any non-whitespace character (next to a word, bracket, or punctuation)
+            ch_prev = doc_text[pos - 1] if pos > 0 else ""
+            ch_next = doc_text[pos] if pos < len(doc_text) else ""
+            if (ch_prev and not ch_prev.isspace()) or (ch_next and not ch_next.isspace()):
+                # Caret is next to or touching a word without explicit selection -> do nothing
                 return
+
+            # 3. The place is empty (blank line, whitespace, or empty task line) -> insert delimiter pair and place caret inside
+            c = self.textCursor()
+            c.beginEditBlock()
+            c.insertText(prefix + suffix)
+            c.movePosition(QTextCursor.MoveOperation.Left, QTextCursor.MoveMode.MoveAnchor, s_len)
+            self.setTextCursor(c)
+            c.endEditBlock()
+            self.viewport().update()
+            return
 
         cursor = self.textCursor()
         text = cursor.selectedText()

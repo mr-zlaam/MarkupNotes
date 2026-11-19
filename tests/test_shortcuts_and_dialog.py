@@ -158,8 +158,8 @@ class TestKeyboardShortcuts(unittest.TestCase):
         self.editor.keyPressEvent(event)
         self.assertEqual(self.editor.toPlainText(), "Hello world")
 
-    def test_markdown_bold_without_selection_on_word(self) -> None:
-        """Verify Ctrl+B without selection selects word under cursor and toggles bold."""
+    def test_markdown_bold_without_selection_next_to_word_does_nothing(self) -> None:
+        """Verify Ctrl+B without explicit selection next to or inside a word does nothing."""
         self.editor.setPlainText("Sample text")
         cursor = self.editor.textCursor()
         cursor.setPosition(3)  # Inside "Sample"
@@ -167,14 +167,46 @@ class TestKeyboardShortcuts(unittest.TestCase):
 
         event = QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_B, Qt.KeyboardModifier.ControlModifier)
         self.editor.keyPressEvent(event)
-        self.assertEqual(self.editor.toPlainText(), "**Sample** text")
+        # Does not auto-select or format when next to a word
+        self.assertEqual(self.editor.toPlainText(), "Sample text")
 
-        # Toggle off
-        cursor = self.editor.textCursor()
-        cursor.setPosition(4)  # Inside "Sample"
+        # Explicit selection formats as bold
+        cursor.select(QTextCursor.SelectionType.WordUnderCursor)
         self.editor.setTextCursor(cursor)
         self.editor.keyPressEvent(event)
+        self.assertEqual(self.editor.toPlainText(), "**Sample** text")
+
+        # Toggle off with explicit selection
+        self.editor.keyPressEvent(event)
         self.assertEqual(self.editor.toPlainText(), "Sample text")
+
+    def test_ctrl_b_next_to_checkbox_does_not_break_syntax(self) -> None:
+        """Verify Ctrl+B resting close to a checkbox bracket never bolds the bracket."""
+        text = "- [ ] if you are doing well"
+        self.editor.setPlainText(text)
+
+        event = QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_B, Qt.KeyboardModifier.ControlModifier)
+
+        # 1. Cursor at index 5 (the space immediately after ']')
+        cursor = self.editor.textCursor()
+        cursor.setPosition(5)
+        self.editor.setTextCursor(cursor)
+        self.editor.keyPressEvent(event)
+        self.assertEqual(self.editor.toPlainText(), text)
+
+        # 2. Cursor at index 6 (directly before 'if')
+        cursor.setPosition(6)
+        self.editor.setTextCursor(cursor)
+        self.editor.keyPressEvent(event)
+        self.assertEqual(self.editor.toPlainText(), text)
+
+        # 3. Empty checkbox item inserts empty bold pair in content area
+        self.editor.setPlainText("- [ ] ")
+        cursor.setPosition(6)
+        self.editor.setTextCursor(cursor)
+        self.editor.keyPressEvent(event)
+        self.assertEqual(self.editor.toPlainText(), "- [ ] ****")
+        self.assertEqual(self.editor.textCursor().position(), 8)
 
     def test_markdown_bold_without_selection_on_whitespace(self) -> None:
         """Verify Ctrl+B on empty space inserts empty pair and positions cursor in middle."""
