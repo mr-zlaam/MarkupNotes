@@ -1,7 +1,9 @@
 """Export utility for converting Markup Notes markdown into styled PDF and HTML documents."""
 
+import base64
 import logging
 from pathlib import Path
+import re
 from typing import Optional
 
 from PyQt6.QtCore import QMarginsF
@@ -92,6 +94,14 @@ ul, ol {
 }
 li {
     margin-bottom: 4px;
+}
+li.task-item {
+    list-style-type: none;
+    margin-left: -14px;
+    margin-bottom: 4px;
+}
+li.task-item.checked {
+    color: #8e8e93;
 }
 """
 
@@ -184,6 +194,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             margin: 0.8em 0;
         }}
         li {{ margin-bottom: 0.3em; }}
+        li.task-item {{
+            list-style-type: none;
+            margin-left: -14px;
+            margin-bottom: 0.3em;
+        }}
+        li.task-item.checked {{
+            color: #8e8e93;
+        }}
         @media print {{
             body {{ padding: 0; background: white; color: black; }}
             .container {{ max-width: 100%; }}
@@ -197,6 +215,64 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 </body>
 </html>
 """
+
+
+def _convert_markdown_to_styled_html(
+    note_title: str,
+    markdown_content: str,
+    dark_theme: bool = False,
+) -> str:
+    """Convert markdown text to styled HTML with modern vector SVG checkboxes.
+
+    Replaces default Qt ballot box glyphs (U+2610 / U+2612) with Apple Notes-style
+    clean rounded vector checkbox icons.
+    """
+    trimmed = markdown_content.lstrip()
+    if not trimmed.startswith("# "):
+        full_markdown = f"# {note_title}\n\n{markdown_content}"
+    else:
+        full_markdown = markdown_content
+
+    doc = QTextDocument()
+    doc.setMarkdown(full_markdown)
+    html = doc.toHtml()
+
+    # Remove Qt's default ballot box ::marker CSS rules
+    html = re.sub(r"li\.(?:unchecked|checked)::marker\s*\{[^}]*\}", "", html)
+
+    border_color = "#6c6c70" if dark_theme else "#8e8e93"
+    dimmed_color = "#7c7c82" if dark_theme else "#8e8e93"
+
+    svg_unchecked = (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 16 16">'
+        f'<rect x="1" y="1" width="14" height="14" rx="3.5" fill="none" stroke="{border_color}" stroke-width="1.8"/>'
+        f"</svg>"
+    )
+    svg_checked = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 16 16">'
+        '<rect x="1" y="1" width="14" height="14" rx="3.5" fill="#0a84ff" stroke="#0a84ff" stroke-width="1.8"/>'
+        '<path d="M4.5 8.5L7 11L11.5 5.5" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>'
+        "</svg>"
+    )
+
+    b64_unchecked = base64.b64encode(svg_unchecked.encode("utf-8")).decode("ascii")
+    b64_checked = base64.b64encode(svg_checked.encode("utf-8")).decode("ascii")
+
+    img_unchecked = f'<img src="data:image/svg+xml;base64,{b64_unchecked}" style="vertical-align: middle;"> '
+    img_checked = f'<img src="data:image/svg+xml;base64,{b64_checked}" style="vertical-align: middle;"> '
+
+    html = re.sub(
+        r'<li class="unchecked"([^>]*)>',
+        rf'<li class="task-item unchecked" style="list-style-type: none; margin-left: -12px; margin-bottom: 4px;">{img_unchecked}',
+        html,
+    )
+    html = re.sub(
+        r'<li class="checked"([^>]*)>',
+        rf'<li class="task-item checked" style="list-style-type: none; margin-left: -12px; margin-bottom: 4px; color: {dimmed_color};">{img_checked}',
+        html,
+    )
+
+    return html
 
 
 def export_note_to_pdf(
@@ -227,17 +303,16 @@ def export_note_to_pdf(
         )
         writer.setPageLayout(layout)
 
-        doc = QTextDocument()
-        doc.setDefaultStyleSheet(PDF_STYLE)
+        styled_html = _convert_markdown_to_styled_html(note_title, markdown_content, dark_theme=False)
 
-        # Prepend title header if not already the first H1 in content
-        trimmed = markdown_content.lstrip()
-        if not trimmed.startswith("# "):
-            full_markdown = f"# {note_title}\n\n{markdown_content}"
+        # Inject PDF_STYLE
+        if "<style" in styled_html:
+            styled_html = re.sub(r"(<style[^>]*>)", rf"\1\n{PDF_STYLE}\n", styled_html, count=1)
         else:
-            full_markdown = markdown_content
+            styled_html = f"<html><head><style>{PDF_STYLE}</style></head><body>{styled_html}</body></html>"
 
-        doc.setMarkdown(full_markdown)
+        doc = QTextDocument()
+        doc.setHtml(styled_html)
         doc.print(writer)
         return True
     except Exception as err:
@@ -265,27 +340,18 @@ def export_note_to_html(
     try:
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        doc = QTextDocument()
-
-        trimmed = markdown_content.lstrip()
-        if not trimmed.startswith("# "):
-            full_markdown = f"# {note_title}\n\n{markdown_content}"
-        else:
-            full_markdown = markdown_content
-
-        doc.setMarkdown(full_markdown)
-        body_html = doc.toHtml()
+        styled_html = _convert_markdown_to_styled_html(note_title, markdown_content, dark_theme=dark_theme)
 
         # Extract inner body content from QTextDocument HTML
         start_tag = "<body"
         end_tag = "</body>"
-        s_idx = body_html.find(start_tag)
+        s_idx = styled_html.find(start_tag)
         if s_idx != -1:
-            body_start = body_html.find(">", s_idx) + 1
-            e_idx = body_html.find(end_tag)
-            extracted_content = body_html[body_start:e_idx] if e_idx != -1 else body_html[body_start:]
+            body_start = styled_html.find(">", s_idx) + 1
+            e_idx = styled_html.find(end_tag)
+            extracted_content = styled_html[body_start:e_idx] if e_idx != -1 else styled_html[body_start:]
         else:
-            extracted_content = body_html
+            extracted_content = styled_html
 
         if dark_theme:
             bg_color = "#1e1e22"
