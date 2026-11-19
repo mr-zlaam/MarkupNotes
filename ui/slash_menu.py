@@ -123,6 +123,14 @@ COMMANDS: List[SlashCommand] = [
         prefix="/date",
         keywords=("date", "today", "yesterday", "tomorrow", "calendar", "time", "day"),
     ),
+    SlashCommand(
+        id="video",
+        title="YouTube Video",
+        description="Embed a YouTube video preview card",
+        icon="YT",
+        prefix="https://www.youtube.com/watch?v=",
+        keywords=("youtube", "video", "embed", "play", "media", "stream"),
+    ),
 ]
 
 

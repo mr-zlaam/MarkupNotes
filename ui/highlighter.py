@@ -20,6 +20,10 @@ from utils.code_engine import (
     find_code_regions,
 )
 from utils.date_format import parse_date_string
+from utils.video_engine import (
+    VideoRegion,
+    find_video_regions,
+)
 from utils.math_engine import (
     FENCE_DISPLAY_MATH_RE,
     INLINE_MATH_RE,
@@ -90,6 +94,7 @@ class MarkdownHighlighter(QSyntaxHighlighter):
         self.math_regions: List[MathRegion] = []
         self.mermaid_regions: List[MermaidRegion] = []
         self.code_regions: List[CodeRegion] = []
+        self.video_regions: List[VideoRegion] = []
         self.date_blocks: Dict[int, date] = {}
         self._block_modes: Dict[int, Tuple[str, int]] = {}
         self._ui_scale: float = 1.0
@@ -264,6 +269,19 @@ class MarkdownHighlighter(QSyntaxHighlighter):
         self.mermaid_regions = find_mermaid_regions(doc)
         self.code_regions = find_code_regions(doc)
 
+        # Collect blocks excluded from video detection
+        excluded_blocks: Set[int] = set()
+        for tr in self.table_regions:
+            excluded_blocks.update(range(tr.start_block, tr.end_block + 1))
+        for mr in self.math_regions:
+            excluded_blocks.update(range(mr.start_block, mr.end_block + 1))
+        for mmd in self.mermaid_regions:
+            excluded_blocks.update(range(mmd.start_block, mmd.end_block + 1))
+        for cr in self.code_regions:
+            excluded_blocks.update(range(cr.start_block, cr.end_block + 1))
+
+        self.video_regions = find_video_regions(doc, excluded_blocks=excluded_blocks)
+
         new_modes: Dict[int, Tuple[str, int]] = {}
 
         # 1. Tables
@@ -351,6 +369,17 @@ class MarkdownHighlighter(QSyntaxHighlighter):
                         new_modes[bn] = ("inactive_date", date_pt)
             b_node = b_node.next()
 
+        # 6. YouTube Video Cards (Standalone URLs & <iframe>)
+        video_pt = max(10, int(round(14 * scale)))
+        for vr in self.video_regions:
+            active_in_video = vr.start_block <= self.active_block_number <= vr.end_block
+            if active_in_video:
+                for b in range(vr.start_block, vr.end_block + 1):
+                    new_modes[b] = ("active_video", 12)
+            else:
+                for b in range(vr.start_block, vr.end_block + 1):
+                    new_modes[b] = ("inactive_video", video_pt)
+
         self._block_modes = new_modes
         changed_blocks: Set[int] = set()
         all_keys = set(old_modes.keys()) | set(new_modes.keys())
@@ -395,12 +424,17 @@ class MarkdownHighlighter(QSyntaxHighlighter):
                         self.setFormat(m.start(), 1, self.table_pipe_format)
                 return
 
-            if mode in ("inactive_math", "inactive_mermaid", "inactive_code", "inactive_date"):
+            if mode in ("inactive_math", "inactive_mermaid", "inactive_code", "inactive_date", "inactive_video"):
                 self.setCurrentBlockState(0)
                 tall_fmt = QTextCharFormat()
                 tall_fmt.setFontPointSize(pt_size)
                 tall_fmt.setForeground(QColor(0, 0, 0, 0))
                 self.setFormat(0, max(1, len(text)), tall_fmt)
+                return
+
+            if mode == "active_video":
+                self.setCurrentBlockState(0)
+                self.setFormat(0, len(text), self.code_block_format)
                 return
 
             if mode == "active_code":

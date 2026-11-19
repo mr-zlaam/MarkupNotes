@@ -52,6 +52,12 @@ from ui.selection_toolbar import SelectionFormatToolbar
 from ui.slash_menu import SlashCommand, SlashCommandPalette
 from utils.date_card import render_date_card
 from utils.exporter import export_note_to_html, export_note_to_pdf
+from utils.video_engine import (
+    VideoRegion,
+    YouTubeCacheManager,
+    get_video_card_dimensions,
+    render_video_card,
+)
 from utils.touch import TouchScrollTracker, is_touch_event
 from utils.transient_scrollbar import TransientScrollBarController
 from utils.icons import (
@@ -266,6 +272,12 @@ class MarkdownEditor(QTextEdit):
         self._date_card_rects: dict[int, tuple[QRectF, date]] = {}
         self._hovered_date_block: Optional[int] = None
 
+        # YouTube video card interaction state
+        self._video_card_rects: dict[int, tuple[QRectF, VideoRegion]] = {}
+        self._hovered_video_block: Optional[int] = None
+        self._hovered_video_play: Optional[int] = None
+        YouTubeCacheManager.instance().thumbnail_ready.connect(self._on_youtube_thumbnail_ready)
+
         # Floating text format bubble toolbar (Notion-style inline formatting)
         self.format_toolbar = SelectionFormatToolbar(self)
         self.format_toolbar.format_requested.connect(self._apply_text_format)
@@ -286,6 +298,10 @@ class MarkdownEditor(QTextEdit):
         # Transient auto-hiding scrollbars (vertical & horizontal)
         self._transient_scrollbar = TransientScrollBarController(self.verticalScrollBar(), parent=self)
         self._transient_h_scrollbar = TransientScrollBarController(self.horizontalScrollBar(), parent=self)
+
+    def _on_youtube_thumbnail_ready(self, video_id: str) -> None:
+        """Trigger viewport repaint when background YouTube thumbnail/metadata finishes loading."""
+        self.viewport().update()
 
     def set_ui_scale(self, scale: float) -> None:
         """Set UI scale factor and refresh highlighter and viewport."""
@@ -1242,6 +1258,20 @@ class MarkdownEditor(QTextEdit):
                         inactive_code_blocks[b_num] = (float(line_h), True)
                     inactive_code_blocks[cr.end_block] = (float(bot_pad + round(9.0 * scale)), True)
 
+            inactive_video_blocks: dict[int, tuple[float, bool]] = {}
+            avail_w = max(200.0, float(self.viewport().width() - 2 * self._horizontal_padding))
+            _, card_h = get_video_card_dimensions(avail_w, ui_scale=scale)
+            card_h_with_margin = card_h + round(12.0 * scale)
+            for vr in self.highlighter.video_regions:
+                if not (vr.start_block <= active_bn <= vr.end_block):
+                    count = max(1, vr.end_block - vr.start_block + 1)
+                    if count == 1:
+                        inactive_video_blocks[vr.start_block] = (float(card_h_with_margin), True)
+                    else:
+                        per_block_h = float(card_h_with_margin / count)
+                        for b_num in range(vr.start_block, vr.end_block + 1):
+                            inactive_video_blocks[b_num] = (per_block_h, True)
+
             try:
                 while b.isValid():
                     b_num = b.blockNumber()
@@ -1255,6 +1285,9 @@ class MarkdownEditor(QTextEdit):
 
                     if b_num in inactive_code_blocks:
                         target_lh, target_nb = inactive_code_blocks[b_num]
+                        target_lh_type = QTextBlockFormat.LineHeightTypes.FixedHeight.value
+                    elif b_num in inactive_video_blocks:
+                        target_lh, target_nb = inactive_video_blocks[b_num]
                         target_lh_type = QTextBlockFormat.LineHeightTypes.FixedHeight.value
                     else:
                         target_lh = 120.0
@@ -1361,7 +1394,9 @@ class MarkdownEditor(QTextEdit):
         if block_changed:
             was_in_code = any(cr.start_block <= old_block_num <= cr.end_block for cr in self.highlighter.code_regions)
             is_in_code = any(cr.start_block <= new_block_num <= cr.end_block for cr in self.highlighter.code_regions)
-            if was_in_code != is_in_code:
+            was_in_video = any(vr.start_block <= old_block_num <= vr.end_block for vr in self.highlighter.video_regions)
+            is_in_video = any(vr.start_block <= new_block_num <= vr.end_block for vr in self.highlighter.video_regions)
+            if was_in_code != is_in_code or was_in_video != is_in_video:
                 self._margin_timer.start()
 
             changed = self.highlighter.refresh_regions()
@@ -1562,6 +1597,58 @@ class MarkdownEditor(QTextEdit):
             )
 
             if has_sel and (sel_start_b <= b_num <= sel_end_b):
+                painter.save()
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                painter.setPen(QPen(QColor("#0a84ff"), 1.2))
+                painter.setBrush(QBrush(QColor(38, 79, 135, 120)))
+                corner_r = round(10.0 * scale, 1)
+                painter.drawRoundedRect(card_rect, corner_r, corner_r)
+                painter.restore()
+
+        # 4.6. Render Inactive YouTube Video Cards
+        self._video_card_rects.clear()
+        cache_mgr = YouTubeCacheManager.instance()
+        doc_layout = self.document().documentLayout()
+        scroll_y = float(self.verticalScrollBar().value())
+        for vr in self.highlighter.video_regions:
+            if vr.start_block <= active_bn <= vr.end_block:
+                continue
+            b_top = self.document().findBlockByNumber(vr.start_block)
+            b_bot = self.document().findBlockByNumber(vr.end_block)
+            if not (b_top.isValid() and b_bot.isValid()):
+                continue
+
+            top_doc_rect = doc_layout.blockBoundingRect(b_top)
+            block_vp_top = float(top_doc_rect.top()) - scroll_y
+            r_top = self.cursorRect(QTextCursor(b_top))
+
+            avail_w = max(200.0, float(vp_width - 2 * self._horizontal_padding))
+            card_w, card_h = get_video_card_dimensions(avail_w, ui_scale=scale)
+            card_top = block_vp_top + round(6.0 * scale)
+            card_rect = QRectF(float(r_top.left()), card_top, card_w, card_h)
+
+            if card_rect.top() > vp_height or card_rect.bottom() < 0:
+                continue
+            self._video_card_rects[vr.start_block] = (card_rect, vr)
+            self._rendered_block_rects.append((vr.start_block, vr.end_block, card_rect))
+
+            pix = cache_mgr.get_thumbnail(vr.video_id)
+            title, author = cache_mgr.get_metadata(vr.video_id)
+            is_hovered = self._hovered_video_block == vr.start_block
+            is_play_hovered = self._hovered_video_play == vr.start_block
+            render_video_card(
+                painter,
+                card_rect,
+                vr.video_id,
+                pix,
+                title=title,
+                author=author,
+                is_hovered=is_hovered,
+                is_play_hovered=is_play_hovered,
+                ui_scale=scale,
+            )
+
+            if has_sel and (vr.start_block <= sel_end_b and vr.end_block >= sel_start_b):
                 painter.save()
                 painter.setRenderHint(QPainter.RenderHint.Antialiasing)
                 painter.setPen(QPen(QColor("#0a84ff"), 1.2))
@@ -2232,6 +2319,40 @@ class MarkdownEditor(QTextEdit):
             )
             return
 
+        # Inactive YouTube video card hover
+        hovered_video: Optional[int] = None
+        hovered_video_play: Optional[int] = None
+        for b_num, (v_rect, vr) in self._video_card_rects.items():
+            if v_rect.contains(pos):
+                hovered_video = b_num
+                info_h = round(46.0 * scale)
+                thumb_h = max(20.0, v_rect.height() - info_h)
+                btn_w = round(64.0 * scale)
+                btn_h = round(44.0 * scale)
+                btn_x = v_rect.left() + (v_rect.width() - btn_w) / 2.0
+                btn_y = v_rect.top() + (thumb_h - btn_h) / 2.0
+                play_rect = QRectF(btn_x, btn_y, btn_w, btn_h)
+                if play_rect.contains(pos):
+                    hovered_video_play = b_num
+                break
+
+        if hovered_video != self._hovered_video_block or hovered_video_play != self._hovered_video_play:
+            self._hovered_video_block = hovered_video
+            self._hovered_video_play = hovered_video_play
+            self.viewport().update()
+
+        if hovered_video is not None:
+            self.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
+            _, vr = self._video_card_rects[hovered_video]
+            title, author = YouTubeCacheManager.instance().get_metadata(vr.video_id)
+            label = f"{title} - {author}" if author else title
+            QToolTip.showText(
+                event.globalPosition().toPoint(),
+                f"Click to watch: {label}\nDouble-click to edit source",
+                self.viewport(),
+            )
+            return
+
         # Inactive preview card hover
         if self._region_at_pos(pos) is not None:
             self.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
@@ -2377,6 +2498,12 @@ class MarkdownEditor(QTextEdit):
                             self.viewport().update()
                     return
 
+            # 5.6 Click on YouTube Video Card -> open URL in browser
+            for b_num, (v_rect, vr) in list(self._video_card_rects.items()):
+                if v_rect.contains(pos):
+                    self._open_url(vr.url)
+                    return
+
             # Single click on rendered card does NOT blow up the card; double-click is required
             if self._region_at_pos(pos) is not None:
                 return
@@ -2418,6 +2545,10 @@ class MarkdownEditor(QTextEdit):
         """Clear button and card hover states when the cursor leaves the editor."""
         if self._hovered_date_block is not None:
             self._hovered_date_block = None
+            self.viewport().update()
+        if self._hovered_video_block is not None or self._hovered_video_play is not None:
+            self._hovered_video_block = None
+            self._hovered_video_play = None
             self.viewport().update()
         if self._hovered_copy_btn is not None or self._hovered_edit_btn is not None:
             self._hovered_copy_btn = None
