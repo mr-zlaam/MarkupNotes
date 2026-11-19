@@ -1213,11 +1213,11 @@ class MarkdownEditor(QTextEdit):
         line_h = round(22.0 * scale)
         top_pad = round(8.0 * scale)
         bot_pad = round(16.0 * scale)
-        card_h = header_h + top_pad + len(cr.lines) * line_h + bot_pad
+        card_h = float(header_h + top_pad + len(cr.lines) * line_h + bot_pad)
         return QRectF(float(r_top.left()), float(r_top.top()), avail_w, card_h)
 
     def _update_block_margins(self) -> None:
-        """Ensure all blockquotes, list items, and checkboxes have hanging indents and uniform line height."""
+        """Ensure blockquotes, list items, checkboxes, and inactive code blocks have calibrated line heights."""
         if self._updating_margins:
             return
         self._updating_margins = True
@@ -1228,8 +1228,23 @@ class MarkdownEditor(QTextEdit):
             cur.beginEditBlock()
             font = self.font()
             scale = getattr(self, "ui_scale", 1.0)
+            active_bn = self.highlighter.active_block_number
+
+            inactive_code_blocks: dict[int, tuple[float, bool]] = {}
+            header_h = round(28.0 * scale)
+            line_h = round(22.0 * scale)
+            top_pad = round(8.0 * scale)
+            bot_pad = round(16.0 * scale)
+            for cr in self.highlighter.code_regions:
+                if not (cr.start_block <= active_bn <= cr.end_block):
+                    inactive_code_blocks[cr.start_block] = (float(header_h + top_pad), True)
+                    for b_num in range(cr.start_block + 1, cr.end_block):
+                        inactive_code_blocks[b_num] = (float(line_h), True)
+                    inactive_code_blocks[cr.end_block] = (float(bot_pad + round(9.0 * scale)), True)
+
             try:
                 while b.isValid():
+                    b_num = b.blockNumber()
                     text = b.text()
                     target_margin = 0.0
                     target_indent = 0.0
@@ -1237,6 +1252,14 @@ class MarkdownEditor(QTextEdit):
                         target_margin, target_indent = calculate_block_hanging_indent(
                             text, font, ui_scale=scale
                         )
+
+                    if b_num in inactive_code_blocks:
+                        target_lh, target_nb = inactive_code_blocks[b_num]
+                        target_lh_type = QTextBlockFormat.LineHeightTypes.FixedHeight.value
+                    else:
+                        target_lh = 120.0
+                        target_lh_type = QTextBlockFormat.LineHeightTypes.ProportionalHeight.value
+                        target_nb = False
 
                     c = QTextCursor(b)
                     bf = c.blockFormat()
@@ -1247,8 +1270,11 @@ class MarkdownEditor(QTextEdit):
                     if abs(bf.textIndent() - target_indent) > 0.5:
                         bf.setTextIndent(target_indent)
                         changed = True
-                    if abs(bf.lineHeight() - 120.0) > 0.5:
-                        bf.setLineHeight(120.0, QTextBlockFormat.LineHeightTypes.ProportionalHeight.value)
+                    if abs(bf.lineHeight() - target_lh) > 0.5 or bf.lineHeightType() != target_lh_type:
+                        bf.setLineHeight(target_lh, target_lh_type)
+                        changed = True
+                    if bf.nonBreakableLines() != target_nb:
+                        bf.setNonBreakableLines(target_nb)
                         changed = True
                     if changed:
                         c.setBlockFormat(bf)
@@ -1333,6 +1359,11 @@ class MarkdownEditor(QTextEdit):
         self.highlighter.cursor_pos_in_block = new_pos_in_block
 
         if block_changed:
+            was_in_code = any(cr.start_block <= old_block_num <= cr.end_block for cr in self.highlighter.code_regions)
+            is_in_code = any(cr.start_block <= new_block_num <= cr.end_block for cr in self.highlighter.code_regions)
+            if was_in_code != is_in_code:
+                self._margin_timer.start()
+
             changed = self.highlighter.refresh_regions()
             changed.add(old_block_num)
             changed.add(new_block_num)
@@ -1498,21 +1529,8 @@ class MarkdownEditor(QTextEdit):
                 painter.setPen(QPen(QColor("#0a84ff"), 1.2))
                 painter.setBrush(QBrush(QColor(38, 79, 135, 120)))
                 corner_r = round(8.0 * scale, 1)
-                b_bot = self.document().findBlockByNumber(cr.end_block)
-                if b_bot.isValid():
-                    r_bot = self.cursorRect(QTextCursor(b_bot))
-                    if r_bot.bottom() > card_rect.bottom():
-                        leak_r = QRectF(card_rect.left(), card_rect.bottom(), card_rect.width(), float(r_bot.bottom() - card_rect.bottom()))
-                        painter.fillRect(leak_r, sel_bg_color)
                 painter.drawRoundedRect(card_rect, corner_r, corner_r)
                 painter.restore()
-            else:
-                b_bot = self.document().findBlockByNumber(cr.end_block)
-                if b_bot.isValid():
-                    r_bot = self.cursorRect(QTextCursor(b_bot))
-                    if r_bot.bottom() > card_rect.bottom():
-                        leak_r = QRectF(card_rect.left(), card_rect.bottom(), card_rect.width(), float(r_bot.bottom() - card_rect.bottom()))
-                        painter.fillRect(leak_r, self.palette().color(self.backgroundRole()))
 
         # 4.5. Render Inactive Date Cards (@date(...))
         self._date_card_rects.clear()
