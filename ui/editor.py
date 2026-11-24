@@ -2671,29 +2671,63 @@ class MarkdownEditor(QTextEdit):
         return None
 
     def _link_at_pos(self, pos: QPointF | QPoint) -> Optional[tuple[int, int, str]]:
-        """Return (start, end, url) if viewport position is over a Markdown link."""
-        pt = pos.toPoint() if hasattr(pos, "toPoint") else pos
-        cursor = self.cursorForPosition(pt)
-        block = cursor.block()
-        if not block.isValid():
+        """Return (start, end, url) if viewport position is over a Markdown link or raw URL."""
+        details = self._link_details_at_pos(pos)
+        if details is None:
             return None
-        offset = cursor.positionInBlock()
-        return find_link_at_offset(block.text(), offset)
+        start, end, _, url, _ = details
+        return start, end, url
 
     def _link_details_at_pos(
         self, pos: QPointF | QPoint
     ) -> Optional[tuple[int, int, str, str, int]]:
-        """Return (start, end, label, url, block_number) if viewport position is over a Markdown link."""
+        """Return (start, end, label, url, block_number) if viewport position is strictly over rendered link text."""
         pt = pos.toPoint() if hasattr(pos, "toPoint") else pos
         cursor = self.cursorForPosition(pt)
         block = cursor.block()
         if not block.isValid():
             return None
+
+        doc_layout = self.document().documentLayout()
+        layout = block.layout()
+        if doc_layout is None or layout is None or layout.lineCount() == 0:
+            return None
+
+        doc_x = float(pt.x() + self.horizontalScrollBar().value())
+        doc_y = float(pt.y() + self.verticalScrollBar().value())
+        block_rect = doc_layout.blockBoundingRect(block)
+        if not (block_rect.top() <= doc_y <= block_rect.bottom()):
+            return None
+
+        local_y = doc_y - block_rect.top()
+        hit_line = None
+        for i in range(layout.lineCount()):
+            line = layout.lineAt(i)
+            if line.y() <= local_y <= line.y() + line.height():
+                hit_line = line
+                break
+        if hit_line is None:
+            return None
+
         offset = cursor.positionInBlock()
         details = find_link_details_at_offset(block.text(), offset)
         if details is None:
             return None
         start, end, label, url = details
+
+        line_start = hit_line.textStart()
+        line_end = line_start + hit_line.textLength()
+        seg_start = max(start, line_start)
+        seg_end = min(end, line_end)
+        if seg_start >= seg_end:
+            return None
+
+        x1 = block_rect.left() + float(hit_line.cursorToX(seg_start)[0])
+        x2 = block_rect.left() + float(hit_line.cursorToX(seg_end)[0])
+        left_x, right_x = (x1, x2) if x1 <= x2 else (x2, x1)
+        if not (left_x <= doc_x <= right_x):
+            return None
+
         return start, end, label, url, block.blockNumber()
 
     def _scroll_to_anchor(

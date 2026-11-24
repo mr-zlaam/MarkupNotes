@@ -161,6 +161,65 @@ class TestTocAnchorScroll(unittest.TestCase):
         self.assertGreater(editor.verticalScrollBar().value(), 0)
         editor.deleteLater()
 
+    def test_link_hover_hit_test_rejects_empty_space_right_left_and_below(self) -> None:
+        """Link hit-testing and pointer cursor must only trigger directly over rendered link text."""
+        editor = MarkdownEditor()
+        editor.resize(700, 400)
+        editor.setPlainText("https://google.com")
+        editor.show()
+        app.processEvents()
+
+        block = editor.document().findBlockByNumber(0)
+        start_cur = QTextCursor(block)
+        start_cur.setPosition(0)
+        mid_cur = QTextCursor(block)
+        mid_cur.setPosition(8)
+        end_cur = QTextCursor(block)
+        end_cur.setPosition(len("https://google.com"))
+
+        start_rect = editor.cursorRect(start_cur)
+        mid_rect = editor.cursorRect(mid_cur)
+        end_rect = editor.cursorRect(end_cur)
+
+        # 1. Directly over the link text -> detected + PointingHandCursor
+        on_link = QPointF(float(mid_rect.center().x()), float(mid_rect.center().y()))
+        self.assertIsNotNone(editor._link_details_at_pos(on_link))
+        move_on = QMouseEvent(
+            QEvent.Type.MouseMove,
+            on_link,
+            on_link,
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        editor.mouseMoveEvent(move_on)
+        self.assertEqual(editor.viewport().cursor().shape(), Qt.CursorShape.PointingHandCursor)
+
+        # 2. Far to the right on the same line -> NOT a link + IBeamCursor
+        far_right = QPointF(float(end_rect.right() + 120), float(mid_rect.center().y()))
+        self.assertIsNone(editor._link_details_at_pos(far_right))
+        move_right = QMouseEvent(
+            QEvent.Type.MouseMove,
+            far_right,
+            far_right,
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        editor.mouseMoveEvent(move_right)
+        self.assertEqual(editor.viewport().cursor().shape(), Qt.CursorShape.IBeamCursor)
+
+        # 3. Far below the last line (overscroll empty canvas) -> NOT a link
+        far_below = QPointF(float(mid_rect.center().x()), float(mid_rect.bottom() + 150))
+        self.assertIsNone(editor._link_details_at_pos(far_below))
+
+        # 4. Left padding before link start -> NOT a link
+        far_left = QPointF(max(0.0, float(start_rect.left() - 12)), float(mid_rect.center().y()))
+        if far_left.x() < start_rect.left():
+            self.assertIsNone(editor._link_details_at_pos(far_left))
+
+        editor.deleteLater()
+
 
 if __name__ == "__main__":
     unittest.main()
