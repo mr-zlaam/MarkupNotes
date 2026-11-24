@@ -77,26 +77,34 @@ def is_standalone_video_line(text: str) -> bool:
 def find_video_regions(doc: QTextDocument, excluded_blocks: Optional[Set[int]] = None) -> List[VideoRegion]:
     """Scan a QTextDocument for standalone YouTube links and <iframe> blocks."""
     regions: List[VideoRegion] = []
-    total = doc.blockCount()
-    i = 0
     excluded = excluded_blocks or set()
+    b = doc.firstBlock()
 
-    while i < total:
+    while b.isValid():
+        i = b.blockNumber()
         if i in excluded:
-            i += 1
+            b = b.next()
             continue
 
-        text = doc.findBlockByNumber(i).text()
+        text = b.text()
+        lower_t = text.lower()
+        if "youtu" not in lower_t and "<iframe" not in lower_t:
+            b = b.next()
+            continue
+
         stripped = text.strip()
 
         # 1. Multiline or single-line <iframe>
-        if IFRAME_START_RE.match(stripped):
-            j = i
+        if "<iframe" in lower_t and IFRAME_START_RE.match(stripped):
+            cur = b
             combined_lines = [stripped]
             closed = bool(IFRAME_END_RE.search(stripped))
-            while not closed and j + 1 < total:
-                j += 1
-                next_t = doc.findBlockByNumber(j).text().strip()
+            while not closed:
+                nxt = cur.next()
+                if not nxt.isValid():
+                    break
+                cur = nxt
+                next_t = cur.text().strip()
                 combined_lines.append(next_t)
                 if IFRAME_END_RE.search(next_t):
                     closed = True
@@ -109,12 +117,12 @@ def find_video_regions(doc: QTextDocument, excluded_blocks: Optional[Set[int]] =
                     regions.append(
                         VideoRegion(
                             start_block=i,
-                            end_block=j,
+                            end_block=cur.blockNumber(),
                             video_id=vid,
                             url=f"https://www.youtube.com/watch?v={vid}",
                         )
                     )
-                    i = j + 1
+                    b = cur.next()
                     continue
 
         # 2. Standalone URL or markdown link on a single block
@@ -129,10 +137,10 @@ def find_video_regions(doc: QTextDocument, excluded_blocks: Optional[Set[int]] =
                         url=f"https://www.youtube.com/watch?v={vid}",
                     )
                 )
-                i += 1
+                b = b.next()
                 continue
 
-        i += 1
+        b = b.next()
 
     return regions
 

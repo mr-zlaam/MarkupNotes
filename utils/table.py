@@ -133,51 +133,49 @@ def parse_alignments(sep_line: str, num_cols: int) -> List[Qt.AlignmentFlag]:
 def find_table_regions(doc: QTextDocument) -> List[TableRegion]:
     """Scan a QTextDocument and return all valid Markdown tables (header + separator + rows)."""
     regions: List[TableRegion] = []
-    block = doc.firstBlock()
-    total_blocks = doc.blockCount()
-
-    i = 0
-    while i < total_blocks:
-        b = doc.findBlockByNumber(i)
+    b = doc.firstBlock()
+    while b.isValid():
         text = b.text()
-        if is_table_row(text) and (i + 1) < total_blocks:
-            next_b = doc.findBlockByNumber(i + 1)
-            next_text = next_b.text()
-            if is_table_separator(next_text):
-                headers = split_table_cells(text)
-                num_cols = max(len(headers), len(split_table_cells(next_text)))
-                while len(headers) < num_cols:
-                    headers.append("")
-                alignments = parse_alignments(next_text, num_cols)
+        if "|" in text and is_table_row(text):
+            next_b = b.next()
+            if next_b.isValid():
+                next_text = next_b.text()
+                if is_table_separator(next_text):
+                    start_num = b.blockNumber()
+                    headers = split_table_cells(text)
+                    num_cols = max(len(headers), len(split_table_cells(next_text)))
+                    while len(headers) < num_cols:
+                        headers.append("")
+                    alignments = parse_alignments(next_text, num_cols)
 
-                rows: List[Tuple[int, List[str]]] = []
-                end_block = i + 1
-                j = i + 2
-                while j < total_blocks:
-                    row_b = doc.findBlockByNumber(j)
-                    row_text = row_b.text()
-                    if not is_table_row(row_text):
-                        break
-                    if not is_table_separator(row_text):
-                        cells = split_table_cells(row_text)
-                        while len(cells) < num_cols:
-                            cells.append("")
-                        rows.append((j, cells[:num_cols]))
-                    end_block = j
-                    j += 1
+                    rows: List[Tuple[int, List[str]]] = []
+                    end_block = next_b.blockNumber()
+                    row_b = next_b.next()
+                    while row_b.isValid():
+                        row_text = row_b.text()
+                        if "|" not in row_text or not is_table_row(row_text):
+                            break
+                        row_num = row_b.blockNumber()
+                        if not is_table_separator(row_text):
+                            cells = split_table_cells(row_text)
+                            while len(cells) < num_cols:
+                                cells.append("")
+                            rows.append((row_num, cells[:num_cols]))
+                        end_block = row_num
+                        row_b = row_b.next()
 
-                regions.append(
-                    TableRegion(
-                        start_block=i,
-                        end_block=end_block,
-                        headers=headers[:num_cols],
-                        alignments=alignments,
-                        rows=rows,
+                    regions.append(
+                        TableRegion(
+                            start_block=start_num,
+                            end_block=end_block,
+                            headers=headers[:num_cols],
+                            alignments=alignments,
+                            rows=rows,
+                        )
                     )
-                )
-                i = end_block + 1
-                continue
-        i += 1
+                    b = row_b
+                    continue
+        b = b.next()
 
     return regions
 

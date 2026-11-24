@@ -75,31 +75,39 @@ class CodeRegion:
 def find_code_regions(doc: QTextDocument) -> List[CodeRegion]:
     """Scan a QTextDocument for ```lang ... ``` fenced code blocks (skipping mermaid)."""
     regions: List[CodeRegion] = []
-    total = doc.blockCount()
-    i = 0
-    while i < total:
-        text = doc.findBlockByNumber(i).text()
-        m = FENCE_CODE_RE.match(text)
-        if m:
-            lang = m.group(1).lower().strip()
-            if lang != "mermaid":
-                lines: List[str] = []
-                j = i + 1
-                closed = False
-                while j < total:
-                    jt = doc.findBlockByNumber(j).text()
-                    if FENCE_CODE_RE.match(jt):
-                        closed = True
-                        break
-                    # Strip blockquote prefix if embedded
-                    clean_line = re.sub(r"^(?:>\s*)+", "", jt)
-                    lines.append(clean_line)
-                    j += 1
-                if closed:
-                    regions.append(CodeRegion(start_block=i, end_block=j, language=lang, lines=lines))
-                    i = j + 1
-                    continue
-        i += 1
+    block = doc.firstBlock()
+    while block.isValid():
+        text = block.text()
+        if "```" in text:
+            m = FENCE_CODE_RE.match(text)
+            if m:
+                lang = m.group(1).lower().strip()
+                if lang != "mermaid":
+                    start_num = block.blockNumber()
+                    lines: List[str] = []
+                    cur = block.next()
+                    closed = False
+                    while cur.isValid():
+                        jt = cur.text()
+                        if "```" in jt and FENCE_CODE_RE.match(jt):
+                            closed = True
+                            break
+                        # Strip blockquote prefix if embedded
+                        clean_line = re.sub(r"^(?:>\s*)+", "", jt)
+                        lines.append(clean_line)
+                        cur = cur.next()
+                    if closed:
+                        regions.append(
+                            CodeRegion(
+                                start_block=start_num,
+                                end_block=cur.blockNumber(),
+                                language=lang,
+                                lines=lines,
+                            )
+                        )
+                        block = cur.next()
+                        continue
+        block = block.next()
     return regions
 
 

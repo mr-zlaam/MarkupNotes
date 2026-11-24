@@ -17,6 +17,7 @@ from PyQt6.QtGui import (
     QContextMenuEvent,
     QDesktopServices,
     QFont,
+    QFontMetricsF,
     QKeyEvent,
     QKeySequence,
     QMouseEvent,
@@ -63,6 +64,7 @@ from utils.video_engine import (
 )
 from utils.touch import TouchScrollTracker, is_touch_event
 from utils.transient_scrollbar import TransientScrollBarController
+from utils.note_io import count_words_fast
 from utils.undo_manager import PlainTextUndoManager
 from utils.icons import (
     create_backup_icon,
@@ -224,10 +226,14 @@ class MarkdownEditor(QTextEdit):
         self._applying_undo_redo: bool = False
         self._resetting_text: bool = False
         self._cleaning_empty_tag: bool = False
+        self._pending_text_mutation: bool = False
+        self._dirty_margin_blocks: Optional[Set[int]] = None
+        self._last_block_count: int = 1
 
         # Attach cursor-aware Obsidian syntax highlighter
         self.highlighter = MarkdownHighlighter(self.document())
         self.cursorPositionChanged.connect(self._on_cursor_position_changed)
+        self.document().contentsChange.connect(self._on_document_contents_change)
         self.document().contentsChanged.connect(self._on_contents_changed)
         self._rendered_block_rects: list[tuple[int, int, QRectF]] = []
 
@@ -274,6 +280,12 @@ class MarkdownEditor(QTextEdit):
         self._margin_timer.setInterval(50)
         self._margin_timer.timeout.connect(self._update_block_margins)
 
+        # Debounced region rescan timer used for large documents (>400 blocks)
+        self._region_timer = QTimer(self)
+        self._region_timer.setSingleShot(True)
+        self._region_timer.setInterval(150)
+        self._region_timer.timeout.connect(self._flush_deferred_regions)
+
         # Slash command palette (Notion-style block creation)
         self.slash_palette = SlashCommandPalette(self)
         self.slash_palette.command_selected.connect(self._on_slash_command_selected)
@@ -319,7 +331,7 @@ class MarkdownEditor(QTextEdit):
         self.ui_scale = float(scale)
         if hasattr(self, "highlighter"):
             self.highlighter.ui_scale = float(scale)
-        self._margin_timer.start()
+        self._schedule_margin_update(full=True)
         self.viewport().update()
 
     def _refresh_editor_style(self) -> None:
@@ -348,7 +360,7 @@ class MarkdownEditor(QTextEdit):
         metrics = self.fontMetrics()
         self.setTabStopDistance(float(metrics.horizontalAdvance(' ') * getattr(self, "_tab_size", 2)))
         self._refresh_editor_style()
-        self._margin_timer.start()
+        self._schedule_margin_update(full=True)
         self.viewport().update()
 
     def zoom_in(self, step: int = 1) -> None:
@@ -1243,17 +1255,44 @@ class MarkdownEditor(QTextEdit):
         card_h = float(header_h + top_pad + len(cr.lines) * line_h + bot_pad)
         return QRectF(float(r_top.left()), float(r_top.top()), avail_w, card_h)
 
+    def _schedule_margin_update(
+        self,
+        *,
+        blocks: Optional[Set[int]] = None,
+        full: bool = False,
+    ) -> None:
+        """Queue a debounced block-margin update for either specific dirty blocks or the full document."""
+        if full or blocks is None:
+            self._dirty_margin_blocks = None
+        elif self._dirty_margin_blocks is not None:
+            self._dirty_margin_blocks.update(blocks)
+        self._margin_timer.start()
+
+    def _flush_deferred_regions(self) -> None:
+        """Run debounced full-document region scan for large notes and rehighlight changed blocks."""
+        changed = self.highlighter.refresh_regions()
+        if changed:
+            doc = self.document()
+            for b_num in changed:
+                b = doc.findBlockByNumber(b_num)
+                if b.isValid():
+                    self.highlighter.rehighlightBlock(b)
+            self._schedule_margin_update(blocks=changed)
+        self.viewport().update()
+
     def _update_block_margins(self) -> None:
         """Ensure blockquotes, list items, checkboxes, and inactive code blocks have calibrated line heights."""
         if self._updating_margins:
             return
         self._updating_margins = True
+        dirty_blocks = self._dirty_margin_blocks
+        self._dirty_margin_blocks = set()
         try:
             doc = self.document()
-            b = doc.firstBlock()
             cur = QTextCursor(doc)
             cur.beginEditBlock()
             font = self.font()
+            fm = QFontMetricsF(font)
             scale = getattr(self, "ui_scale", 1.0)
             active_bn = self.highlighter.active_block_number
 
@@ -1270,76 +1309,101 @@ class MarkdownEditor(QTextEdit):
                     inactive_code_blocks[cr.end_block] = (float(bot_pad + round(9.0 * scale)), True)
 
             inactive_video_blocks: dict[int, tuple[float, bool]] = {}
-            avail_w = max(200.0, float(self.viewport().width() - 2 * self._horizontal_padding))
-            _, card_h = get_video_card_dimensions(avail_w, ui_scale=scale)
-            card_h_with_margin = card_h + round(12.0 * scale)
-            for vr in self.highlighter.video_regions:
-                if not (vr.start_block <= active_bn <= vr.end_block):
-                    count = max(1, vr.end_block - vr.start_block + 1)
-                    if count == 1:
-                        inactive_video_blocks[vr.start_block] = (float(card_h_with_margin), True)
-                    else:
-                        per_block_h = float(card_h_with_margin / count)
-                        for b_num in range(vr.start_block, vr.end_block + 1):
-                            inactive_video_blocks[b_num] = (per_block_h, True)
+            if self.highlighter.video_regions:
+                avail_w = max(200.0, float(self.viewport().width() - 2 * self._horizontal_padding))
+                _, card_h = get_video_card_dimensions(avail_w, ui_scale=scale)
+                card_h_with_margin = card_h + round(12.0 * scale)
+                for vr in self.highlighter.video_regions:
+                    if not (vr.start_block <= active_bn <= vr.end_block):
+                        count = max(1, vr.end_block - vr.start_block + 1)
+                        if count == 1:
+                            inactive_video_blocks[vr.start_block] = (float(card_h_with_margin), True)
+                        else:
+                            per_block_h = float(card_h_with_margin / count)
+                            for b_num in range(vr.start_block, vr.end_block + 1):
+                                inactive_video_blocks[b_num] = (per_block_h, True)
+
+            def _apply_to_block(b: QTextBlock) -> None:
+                b_num = b.blockNumber()
+                text = b.text()
+                target_margin = 0.0
+                target_indent = 0.0
+                if b.userState() != 1:
+                    target_margin, target_indent = calculate_block_hanging_indent(
+                        text, font, ui_scale=scale, fm=fm
+                    )
+
+                if b_num in inactive_code_blocks:
+                    target_lh, target_nb = inactive_code_blocks[b_num]
+                    target_lh_type = QTextBlockFormat.LineHeightTypes.FixedHeight.value
+                elif b_num in inactive_video_blocks:
+                    target_lh, target_nb = inactive_video_blocks[b_num]
+                    target_lh_type = QTextBlockFormat.LineHeightTypes.FixedHeight.value
+                else:
+                    target_lh = 120.0
+                    target_lh_type = QTextBlockFormat.LineHeightTypes.ProportionalHeight.value
+                    target_nb = False
+
+                bf = b.blockFormat()
+                changed = False
+                if abs(bf.leftMargin() - target_margin) > 0.5:
+                    bf.setLeftMargin(target_margin)
+                    changed = True
+                if abs(bf.textIndent() - target_indent) > 0.5:
+                    bf.setTextIndent(target_indent)
+                    changed = True
+                if abs(bf.lineHeight() - target_lh) > 0.5 or bf.lineHeightType() != target_lh_type:
+                    bf.setLineHeight(target_lh, target_lh_type)
+                    changed = True
+                if bf.nonBreakableLines() != target_nb:
+                    bf.setNonBreakableLines(target_nb)
+                    changed = True
+                if changed:
+                    c = QTextCursor(b)
+                    c.setBlockFormat(bf)
 
             try:
-                while b.isValid():
-                    b_num = b.blockNumber()
-                    text = b.text()
-                    target_margin = 0.0
-                    target_indent = 0.0
-                    if b.userState() != 1:
-                        target_margin, target_indent = calculate_block_hanging_indent(
-                            text, font, ui_scale=scale
-                        )
-
-                    if b_num in inactive_code_blocks:
-                        target_lh, target_nb = inactive_code_blocks[b_num]
-                        target_lh_type = QTextBlockFormat.LineHeightTypes.FixedHeight.value
-                    elif b_num in inactive_video_blocks:
-                        target_lh, target_nb = inactive_video_blocks[b_num]
-                        target_lh_type = QTextBlockFormat.LineHeightTypes.FixedHeight.value
-                    else:
-                        target_lh = 120.0
-                        target_lh_type = QTextBlockFormat.LineHeightTypes.ProportionalHeight.value
-                        target_nb = False
-
-                    c = QTextCursor(b)
-                    bf = c.blockFormat()
-                    changed = False
-                    if abs(bf.leftMargin() - target_margin) > 0.5:
-                        bf.setLeftMargin(target_margin)
-                        changed = True
-                    if abs(bf.textIndent() - target_indent) > 0.5:
-                        bf.setTextIndent(target_indent)
-                        changed = True
-                    if abs(bf.lineHeight() - target_lh) > 0.5 or bf.lineHeightType() != target_lh_type:
-                        bf.setLineHeight(target_lh, target_lh_type)
-                        changed = True
-                    if bf.nonBreakableLines() != target_nb:
-                        bf.setNonBreakableLines(target_nb)
-                        changed = True
-                    if changed:
-                        c.setBlockFormat(bf)
-                    b = b.next()
+                if dirty_blocks is None:
+                    b = doc.firstBlock()
+                    while b.isValid():
+                        _apply_to_block(b)
+                        b = b.next()
+                else:
+                    for b_num in sorted(dirty_blocks):
+                        b = doc.findBlockByNumber(b_num)
+                        if b.isValid():
+                            _apply_to_block(b)
             finally:
                 cur.endEditBlock()
         finally:
             self._updating_margins = False
 
     def _update_blockquote_margins(self) -> None:
-        """Backward-compatible alias for _update_block_margins."""
+        """Backward-compatible alias for full-document _update_block_margins."""
+        self._dirty_margin_blocks = None
         self._update_block_margins()
 
     def setPlainText(self, text: str) -> None:
-        """Set editor plain text, reset undo history, and synchronously apply line height and block margins."""
+        """Set editor plain text, reset undo history, refresh regions, and apply block margins in one pass."""
         self._margin_timer.stop()
+        self._region_timer.stop()
+        self._pending_text_mutation = False
         self._resetting_text = True
         try:
             super().setPlainText(text)
-            self._update_blockquote_margins()
             cur = self.textCursor()
+            self._last_block_count = self.document().blockCount()
+            self.highlighter.active_block_number = cur.block().blockNumber()
+            self.highlighter.cursor_pos_in_block = cur.positionInBlock()
+            changed = self.highlighter.refresh_regions()
+            self._dirty_margin_blocks = None
+            self._update_block_margins()
+            if changed:
+                doc = self.document()
+                for b_num in changed:
+                    b = doc.findBlockByNumber(b_num)
+                    if b.isValid():
+                        self.highlighter.rehighlightBlock(b)
             self.undo_manager.reset(self.toPlainText(), cur.anchor(), cur.position())
         finally:
             self._resetting_text = False
@@ -1387,8 +1451,11 @@ class MarkdownEditor(QTextEdit):
                 target_c.setPosition(clamped_pos, QTextCursor.MoveMode.KeepAnchor)
             self.setTextCursor(target_c)
 
+            self._dirty_margin_blocks = None
             self._update_block_margins()
             self._margin_timer.stop()
+            self._region_timer.stop()
+            self._last_block_count = doc.blockCount()
             self.highlighter.active_block_number = target_c.block().blockNumber()
             self.highlighter.cursor_pos_in_block = target_c.positionInBlock()
             changed = self.highlighter.refresh_regions()
@@ -1441,25 +1508,76 @@ class MarkdownEditor(QTextEdit):
         else:
             super().insertFromMimeData(source)
 
+    def _on_document_contents_change(
+        self, position: int, chars_removed: int, chars_added: int
+    ) -> None:
+        """Track genuine text mutations and dirty block indices in O(1) before contentsChanged."""
+        if self._updating_margins or self._resetting_text or self._applying_undo_redo:
+            return
+        if chars_removed > 0 or chars_added > 0:
+            self._pending_text_mutation = True
+            doc = self.document()
+            b_start = doc.findBlock(position)
+            b_end = doc.findBlock(position + chars_added)
+            if b_start.isValid() and b_end.isValid():
+                s_num = b_start.blockNumber()
+                e_num = b_end.blockNumber()
+                if e_num - s_num <= 25:
+                    dirty = set(range(max(0, s_num - 1), e_num + 2))
+                    if self._dirty_margin_blocks is not None:
+                        self._dirty_margin_blocks.update(dirty)
+                else:
+                    self._dirty_margin_blocks = None
+            else:
+                self._dirty_margin_blocks = None
+
     def _on_contents_changed(self) -> None:
-        """Recompute table, math, and mermaid regions on text content modification."""
-        if not self._updating_margins and not self._resetting_text:
-            self._margin_timer.start()
+        """Recompute regions, record clean text diffs for undo/redo, and schedule dirty-block margins."""
+        had_text_mutation = self._pending_text_mutation
+        self._pending_text_mutation = False
+
+        if self._updating_margins or self._resetting_text:
+            return
+        if not had_text_mutation and not self._applying_undo_redo:
+            return
+
+        doc = self.document()
         cursor = self.textCursor()
-        if not self._updating_margins and not self._resetting_text and not self._applying_undo_redo:
-            self.undo_manager.record_change(
-                self.toPlainText(),
-                cursor.anchor(),
-                cursor.position(),
-                force_merge=self._cleaning_empty_tag,
-            )
-        self.highlighter.active_block_number = cursor.block().blockNumber()
+        cur_bn = cursor.block().blockNumber()
+        new_block_count = doc.blockCount()
+        block_delta = abs(new_block_count - self._last_block_count)
+        self._last_block_count = new_block_count
+
+        if not self._applying_undo_redo:
+            if block_delta > 5:
+                self._schedule_margin_update(full=True)
+            else:
+                dirty = {cur_bn}
+                if block_delta > 0:
+                    dirty.add(max(0, cur_bn - 1))
+                    dirty.add(cur_bn + 1)
+                self._schedule_margin_update(blocks=dirty)
+
+            if had_text_mutation:
+                self.undo_manager.record_change(
+                    self.toPlainText(),
+                    cursor.anchor(),
+                    cursor.position(),
+                    force_merge=self._cleaning_empty_tag,
+                )
+
+        self.highlighter.active_block_number = cur_bn
         self.highlighter.cursor_pos_in_block = cursor.positionInBlock()
-        changed = self.highlighter.refresh_regions()
-        for b_num in changed:
-            b = self.document().findBlockByNumber(b_num)
-            if b.isValid():
-                self.highlighter.rehighlightBlock(b)
+
+        if new_block_count > 400 and not self._applying_undo_redo:
+            self._region_timer.start()
+        else:
+            self._region_timer.stop()
+            changed = self.highlighter.refresh_regions()
+            for b_num in changed:
+                b = doc.findBlockByNumber(b_num)
+                if b.isValid():
+                    self.highlighter.rehighlightBlock(b)
         self.viewport().update()
 
     def _on_cursor_position_changed(self) -> None:
@@ -1497,10 +1615,9 @@ class MarkdownEditor(QTextEdit):
                         self.setTextCursor(snap_c)
                         return
 
-        if not self._applying_undo_redo and not self._resetting_text:
+        if not self._applying_undo_redo and not self._resetting_text and not self._pending_text_mutation:
             cur_now = self.textCursor()
-            if self.toPlainText() == self.undo_manager.current_text:
-                self.undo_manager.update_cursor(cur_now.anchor(), cur_now.position())
+            self.undo_manager.update_cursor(cur_now.anchor(), cur_now.position())
 
         old_block_num = self.highlighter.active_block_number
         old_pos_in_block = getattr(self.highlighter, "cursor_pos_in_block", -1)
@@ -1510,14 +1627,21 @@ class MarkdownEditor(QTextEdit):
         self.highlighter.cursor_pos_in_block = new_pos_in_block
 
         if block_changed:
-            was_in_code = any(cr.start_block <= old_block_num <= cr.end_block for cr in self.highlighter.code_regions)
-            is_in_code = any(cr.start_block <= new_block_num <= cr.end_block for cr in self.highlighter.code_regions)
-            was_in_video = any(vr.start_block <= old_block_num <= vr.end_block for vr in self.highlighter.video_regions)
-            is_in_video = any(vr.start_block <= new_block_num <= vr.end_block for vr in self.highlighter.video_regions)
-            if was_in_code != is_in_code or was_in_video != is_in_video:
-                self._margin_timer.start()
+            dirty_region_blocks: Set[int] = set()
+            for cr in self.highlighter.code_regions:
+                was_in = cr.start_block <= old_block_num <= cr.end_block
+                is_in = cr.start_block <= new_block_num <= cr.end_block
+                if was_in != is_in:
+                    dirty_region_blocks.update(range(cr.start_block, cr.end_block + 1))
+            for vr in self.highlighter.video_regions:
+                was_in = vr.start_block <= old_block_num <= vr.end_block
+                is_in = vr.start_block <= new_block_num <= vr.end_block
+                if was_in != is_in:
+                    dirty_region_blocks.update(range(vr.start_block, vr.end_block + 1))
+            if dirty_region_blocks:
+                self._schedule_margin_update(blocks=dirty_region_blocks)
 
-            changed = self.highlighter.refresh_regions()
+            changed = self.highlighter.update_active_modes()
             changed.add(old_block_num)
             changed.add(new_block_num)
             for b_num in changed:
@@ -3439,6 +3563,12 @@ class EditorPanel(QWidget):
         self._title_timer.setInterval(350)
         self._title_timer.timeout.connect(self._flush_title_change)
 
+        # Debounce timer for word counting on large documents
+        self._word_count_timer = QTimer(self)
+        self._word_count_timer.setSingleShot(True)
+        self._word_count_timer.setInterval(250)
+        self._word_count_timer.timeout.connect(self._update_word_count)
+
         self._init_ui()
 
     def _init_ui(self) -> None:
@@ -3805,24 +3935,23 @@ class EditorPanel(QWidget):
         self.title_edit.blockSignals(False)
 
         # Clean any accidental escaped headings (\# ) and normalize "- []" to "- [ ]"
-        cleaned_content = re.sub(r"^\\(#+\s)", r"\1", note.content, flags=re.MULTILINE)
-        cleaned_content = re.sub(
-            r"^(\s*[-*+]\s*)\[\](?=\s|$)", r"\1[ ]", cleaned_content, flags=re.MULTILINE
-        )
+        cleaned_content = note.content
+        if "\\#" in cleaned_content:
+            cleaned_content = re.sub(r"^\\(#+\s)", r"\1", cleaned_content, flags=re.MULTILINE)
+        if "[]" in cleaned_content:
+            cleaned_content = re.sub(
+                r"^(\s*[-*+]\s*)\[\](?=\s|$)", r"\1[ ]", cleaned_content, flags=re.MULTILINE
+            )
 
         self.editor._table_scroll_x.clear()
         self.editor._code_scroll_x.clear()
         self.editor._copied_code_block = None
         self.editor._scrollbar_drag = None
         self.editor._transient_scrollbar.hide_immediately()
+        self._word_count_timer.stop()
 
         self.editor.blockSignals(True)
         self.editor.setPlainText(cleaned_content)
-        self.editor._update_blockquote_margins()
-        self.editor.highlighter.active_block_number = self.editor.textCursor().block().blockNumber()
-        self.editor.highlighter.cursor_pos_in_block = self.editor.textCursor().positionInBlock()
-        self.editor.highlighter.refresh_regions()
-        self.editor.highlighter.rehighlight()
         self.editor.viewport().update()
         self.editor.blockSignals(False)
 
@@ -3867,13 +3996,17 @@ class EditorPanel(QWidget):
         return self.editor.toPlainText()
 
     def _on_text_changed(self) -> None:
-        self._update_word_count()
+        if self.editor.document().blockCount() > 400:
+            self._word_count_timer.start()
+        else:
+            self._word_count_timer.stop()
+            self._update_word_count()
         self._save_timer.start()
         if hasattr(self, "find_replace_bar") and self.find_replace_bar.isVisible() and self.find_replace_bar.find_input.text():
             self.find_replace_bar.retrigger_search()
 
     def _update_word_count(self) -> None:
-        words = len(self.editor.toPlainText().split())
+        words = count_words_fast(self.editor.toPlainText())
         self.word_count_label.setText(f"{words} words")
 
     def flush_pending_save(self) -> None:

@@ -258,30 +258,60 @@ class MarkdownHighlighter(QSyntaxHighlighter):
         self.kbd_format.setFontWeight(QFont.Weight.DemiBold)
 
     def refresh_regions(self) -> Set[int]:
-        """Re-scan document for tables, display math, and mermaid blocks, returning changed block numbers."""
+        """Re-scan document for tables, math, mermaid, code, date, and video regions using fast pre-checks."""
+        doc = self.document()
+        if doc is None:
+            return set()
+
+        full_text = doc.toPlainText()
+        full_lower = full_text.lower()
+
+        self.table_regions = find_table_regions(doc) if "|" in full_text else []
+        self.math_regions = find_display_math_regions(doc) if "$$" in full_text else []
+        if "```" in full_text:
+            self.mermaid_regions = find_mermaid_regions(doc) if "mermaid" in full_lower else []
+            self.code_regions = find_code_regions(doc)
+        else:
+            self.mermaid_regions = []
+            self.code_regions = []
+
+        if "youtu" in full_lower or "<iframe" in full_lower:
+            excluded_blocks: Set[int] = set()
+            for tr in self.table_regions:
+                excluded_blocks.update(range(tr.start_block, tr.end_block + 1))
+            for mr in self.math_regions:
+                excluded_blocks.update(range(mr.start_block, mr.end_block + 1))
+            for mmd in self.mermaid_regions:
+                excluded_blocks.update(range(mmd.start_block, mmd.end_block + 1))
+            for cr in self.code_regions:
+                excluded_blocks.update(range(cr.start_block, cr.end_block + 1))
+            self.video_regions = find_video_regions(doc, excluded_blocks=excluded_blocks)
+        else:
+            self.video_regions = []
+
+        self.date_blocks.clear()
+        if "@date" in full_lower or "[date:" in full_lower:
+            b_node = doc.firstBlock()
+            while b_node.isValid():
+                text_line = b_node.text()
+                if "date" in text_line.lower():
+                    dm = DATE_PATTERN.match(text_line)
+                    if dm:
+                        raw_val = dm.group(1) or dm.group(2) or dm.group(3)
+                        parsed = parse_date_string(raw_val)
+                        if parsed is not None:
+                            self.date_blocks[b_node.blockNumber()] = parsed
+                b_node = b_node.next()
+
+        return self.update_active_modes()
+
+    def update_active_modes(self) -> Set[int]:
+        """Recompute active/inactive region block modes from cached regions without rescanning document."""
         doc = self.document()
         if doc is None:
             return set()
 
         old_modes = dict(self._block_modes)
-        self.table_regions = find_table_regions(doc)
-        self.math_regions = find_display_math_regions(doc)
-        self.mermaid_regions = find_mermaid_regions(doc)
-        self.code_regions = find_code_regions(doc)
-
-        # Collect blocks excluded from video detection
-        excluded_blocks: Set[int] = set()
-        for tr in self.table_regions:
-            excluded_blocks.update(range(tr.start_block, tr.end_block + 1))
-        for mr in self.math_regions:
-            excluded_blocks.update(range(mr.start_block, mr.end_block + 1))
-        for mmd in self.mermaid_regions:
-            excluded_blocks.update(range(mmd.start_block, mmd.end_block + 1))
-        for cr in self.code_regions:
-            excluded_blocks.update(range(cr.start_block, cr.end_block + 1))
-
-        self.video_regions = find_video_regions(doc, excluded_blocks=excluded_blocks)
-
         new_modes: Dict[int, Tuple[str, int]] = {}
 
         # 1. Tables
@@ -353,21 +383,10 @@ class MarkdownHighlighter(QSyntaxHighlighter):
                 new_modes[cr.end_block] = ("inactive_code", fence_pt)
 
         # 5. Date Cards (@date(...))
-        self.date_blocks.clear()
         date_pt = max(18, int(round(30 * scale)))
-        b_node = doc.firstBlock()
-        while b_node.isValid():
-            text_line = b_node.text()
-            dm = DATE_PATTERN.match(text_line)
-            if dm:
-                raw_val = dm.group(1) or dm.group(2) or dm.group(3)
-                parsed = parse_date_string(raw_val)
-                if parsed is not None:
-                    bn = b_node.blockNumber()
-                    self.date_blocks[bn] = parsed
-                    if bn != self.active_block_number:
-                        new_modes[bn] = ("inactive_date", date_pt)
-            b_node = b_node.next()
+        for bn in self.date_blocks:
+            if bn != self.active_block_number:
+                new_modes[bn] = ("inactive_date", date_pt)
 
         # 6. YouTube Video Cards (Standalone URLs & <iframe>)
         video_pt = max(10, int(round(14 * scale)))

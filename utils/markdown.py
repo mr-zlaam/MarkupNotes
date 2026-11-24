@@ -13,10 +13,14 @@ LINK_PATTERN = re.compile(
 )
 
 
+_HANGING_PREFIX_CHARS = frozenset(" \t>-*+0123456789")
+
+
 def calculate_block_hanging_indent(
     text: str,
     font: QFont,
     ui_scale: float = 1.0,
+    fm: Optional[QFontMetricsF] = None,
 ) -> Tuple[float, float]:
     """Calculate (left_margin, text_indent) for a line of text in Markdown.
 
@@ -34,6 +38,9 @@ def calculate_block_hanging_indent(
           first line starts at left_margin + text_indent (the indent level)
           continuation lines wrap to left_margin (aligned with text after marker)
     """
+    if not text or text[0] not in _HANGING_PREFIX_CHARS:
+        return 0.0, 0.0
+
     quote_margin = 0.0
     inner_text = text
     qm = QUOTE_PATTERN.match(text)
@@ -44,27 +51,30 @@ def calculate_block_hanging_indent(
             quote_margin = level * 18.0 + 8.0
         inner_text = text[len(prefix_q):]
 
-    fm = QFontMetricsF(font)
+    if not inner_text or inner_text[0] not in _HANGING_PREFIX_CHARS:
+        return (round(quote_margin, 2), 0.0) if quote_margin > 0.0 else (0.0, 0.0)
+
+    metrics = fm if fm is not None else QFontMetricsF(font)
     cb_match = CHECKBOX_PATTERN.match(inner_text)
     if cb_match:
         indent, prefix, _, _ = cb_match.groups()
-        indent_w = fm.horizontalAdvance(indent)
+        indent_w = metrics.horizontalAdvance(indent)
         marker = prefix.strip()[0] if prefix.strip() else "-"
         canonical_prefix = f"{marker} [ ] "
-        marker_w = fm.horizontalAdvance(canonical_prefix)
+        marker_w = metrics.horizontalAdvance(canonical_prefix)
         return round(quote_margin + indent_w + marker_w, 2), round(-marker_w, 2)
 
     list_match = LIST_PATTERN.match(inner_text)
     if list_match:
         indent, marker, space, _ = list_match.groups()
-        indent_w = fm.horizontalAdvance(indent)
+        indent_w = metrics.horizontalAdvance(indent)
         if marker in ("-", "*", "+"):
-            marker_w = fm.horizontalAdvance(marker + space) + len(marker + space) * round(10.0 * ui_scale, 1)
+            marker_w = metrics.horizontalAdvance(marker + space) + len(marker + space) * round(10.0 * ui_scale, 1)
         else:
             bold_font = QFont(font)
             bold_font.setWeight(QFont.Weight.Bold)
             fm_bold = QFontMetricsF(bold_font)
-            marker_w = fm_bold.horizontalAdvance(marker) + fm.horizontalAdvance(space) + len(space) * round(14.0 * ui_scale, 1)
+            marker_w = fm_bold.horizontalAdvance(marker) + metrics.horizontalAdvance(space) + len(space) * round(14.0 * ui_scale, 1)
         return round(quote_margin + indent_w + marker_w, 2), round(-marker_w, 2)
 
     if quote_margin > 0.0:

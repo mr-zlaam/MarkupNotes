@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import time
 from typing import List, Optional, Union
 
 from PyQt6.QtCore import QEasingCurve, QFileSystemWatcher, QTimer, QVariantAnimation, Qt
@@ -18,6 +19,7 @@ from ui.editor import EditorPanel
 from ui.note_list import NoteListPanel
 from ui.sidebar import FolderSidebar
 from utils.file_validator import MAX_FOLDER_NAME_LENGTH, validate_folder_name, validate_markdown_file
+from utils.note_io import AsyncSaveQueue, note_matches_query
 
 ZOOM_STEPS: tuple[float, ...] = (0.75, 0.85, 0.9, 1.0, 1.1, 1.25, 1.4, 1.6, 1.8, 2.0)
 
@@ -63,6 +65,7 @@ class MainWindow(QMainWindow):
         self._current_note: Optional[Note] = None
         self._all_current_notes: List[Note] = []
         self._is_saving_internally: bool = False
+        self._save_queue = AsyncSaveQueue()
         self._active_pane_anim: Optional[QVariantAnimation] = None
         self._registered_shortcuts: List[QShortcut] = []
         self._active_modal_overlay: Optional[QWidget] = None
@@ -589,7 +592,12 @@ class MainWindow(QMainWindow):
         if query:
             filtered = [
                 n for n in self._all_current_notes
-                if query in n.title.lower() or query in n.content.lower()
+                if note_matches_query(
+                    n.title,
+                    n.path,
+                    n.content if n.has_loaded_content else None,
+                    query,
+                )
             ]
         else:
             filtered = self._all_current_notes
@@ -605,7 +613,17 @@ class MainWindow(QMainWindow):
             self._current_note = None
             self.editor.load_note(None)
 
+    def _upsert_current_note_in_list(self, old_path: Path, updated_note: Note) -> None:
+        """Update or insert a note inside `_all_current_notes` without rescanning disk."""
+        updated_list = [n for n in self._all_current_notes if n.path not in (old_path, updated_note.path)]
+        updated_list.append(updated_note)
+        updated_list.sort(key=lambda n: n.modified_at, reverse=True)
+        self._all_current_notes = updated_list
+
     def _on_folder_selected(self, folder: Optional[Path]) -> None:
+        self.flush_pending_save()
+        if self._current_note is not None:
+            self._current_note.content = None
         self._current_folder = folder
         self._refresh_notes()
 
@@ -662,6 +680,10 @@ class MainWindow(QMainWindow):
     def _on_note_selected(self, note: Note) -> None:
         if self._current_note is not None and self._current_note.path == note.path:
             return
+        prev_note = self._current_note
+        self.flush_pending_save()
+        if prev_note is not None and prev_note.path != note.path:
+            prev_note.content = None
         self._current_note = note
         self.editor.load_note(note)
 
@@ -706,19 +728,22 @@ class MainWindow(QMainWindow):
 
         self._is_saving_internally = True
         current_path = self._current_note.path
-        success = self.storage.save_note_content(current_path, new_content)
+        success = self._save_queue.save(
+            current_path,
+            new_content,
+            self.storage.save_note_content,
+        )
         if not success:
             self._is_saving_internally = False
             return
 
-        # Update current note instance and card preview snippet without renaming file
-        self._current_note = Note.from_file(current_path)
-        if self._current_note is not None:
-            self.editor.update_meta(self._current_note)
-            self.note_list.update_note_card(str(current_path), self._current_note)
-            self._all_current_notes = self.storage.list_notes(self._current_folder)
-            self.backup_panel.refresh_status()
-            self.backup_panel.schedule_auto_backup()
+        # Update current note instance and card preview in memory without rescanning folder
+        self._current_note = Note.from_memory(current_path, new_content, time.time())
+        self.editor.update_meta(self._current_note)
+        self.note_list.update_note_card(str(current_path), self._current_note)
+        self._upsert_current_note_in_list(current_path, self._current_note)
+        self.backup_panel.refresh_status()
+        self.backup_panel.schedule_auto_backup()
 
         QTimer.singleShot(500, self._clear_saving_flag)
 
@@ -735,17 +760,18 @@ class MainWindow(QMainWindow):
         if sanitized_title == current_path.stem:
             return
 
+        self._save_queue.wait_for_done()
         self._is_saving_internally = True
         renamed_path = self.storage.rename_note_file(current_path, sanitized_title)
         if renamed_path != current_path:
             self._transfer_note_color(str(current_path), str(renamed_path))
-            self._current_note = Note.from_file(renamed_path)
-            if self._current_note is not None:
-                self.editor.update_meta(self._current_note)
-                self.note_list.update_note_card(str(current_path), self._current_note)
-                self._all_current_notes = self.storage.list_notes(self._current_folder)
-                self.backup_panel.refresh_status()
-                self.backup_panel.schedule_auto_backup()
+            current_content = self.editor.get_content()
+            self._current_note = Note.from_memory(renamed_path, current_content, time.time())
+            self.editor.update_meta(self._current_note)
+            self.note_list.update_note_card(str(current_path), self._current_note)
+            self._upsert_current_note_in_list(current_path, self._current_note)
+            self.backup_panel.refresh_status()
+            self.backup_panel.schedule_auto_backup()
 
         QTimer.singleShot(500, self._clear_saving_flag)
 
@@ -962,9 +988,15 @@ class MainWindow(QMainWindow):
             self.note_list.set_notes(self._all_current_notes)
             return
 
+        query_lower = query.lower()
         filtered = [
             n for n in self._all_current_notes
-            if query in n.title.lower() or query in n.content.lower()
+            if note_matches_query(
+                n.title,
+                n.path,
+                n.content if n.has_loaded_content else None,
+                query_lower,
+            )
         ]
         self.note_list.set_notes(filtered)
 
@@ -1137,8 +1169,9 @@ class MainWindow(QMainWindow):
         self._refresh_notes(preserve_path=str(reverted_file) if reverted_file.exists() else None)
 
     def flush_pending_save(self) -> None:
-        """Flush any unsaved debounced editor changes immediately."""
+        """Flush any unsaved debounced editor changes and wait for background disk writes."""
         self.editor.flush_pending_save()
+        self._save_queue.wait_for_done()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """Ensure any pending note edits and window geometry are persisted before exit."""
