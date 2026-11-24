@@ -61,7 +61,7 @@ SHORTCUT_GROUPS: List[Tuple[str, List[Tuple[str, str, List[str]]]]] = [
             ("Delete Folder", "Prompt confirmation to delete focused folder", ["Delete"]),
             ("Delete Note", "Prompt confirmation to delete focused note card", ["Delete"]),
             ("Toggle Folder", "Single-click row to open or close subfolders", ["Click"]),
-            ("Collapse / Expand All Folders", "Toggle collapsing or expanding all folders", ["Ctrl", "Left Arrow"]),
+            ("Collapse / Expand All Folders", "Toggle collapsing or expanding all folders (when Folders pane is focused)", ["Ctrl", "Left Arrow"]),
             ("Reload Workspace", "Sync folders, notes, and customizations from disk", ["Ctrl", "R"]),
             ("Pin / Unpin Note or Folder", "Pin or unpin the active note or focused folder", ["Alt", "P"]),
             ("Multi-Selection Mode", "Right-click item and choose Select", ["Right-Click"]),

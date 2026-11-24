@@ -165,7 +165,6 @@ class MainWindow(QMainWindow):
         self.editor.zoom_out_requested.connect(self._on_zoom_out)
         self.editor.zoom_reset_requested.connect(self._on_zoom_reset)
         self.editor.word_wrap_toggled.connect(self._on_editor_word_wrap_toggled)
-        self.editor.collapse_all_folders_requested.connect(self.sidebar.toggle_collapse_all_folders)
         self.editor.focus_received.connect(self._on_editor_focus_received)
         self.editor.pin_active_note_requested.connect(self._on_toggle_pin_active_note)
         self.editor.image_pasted.connect(self._on_editor_image_pasted)
@@ -224,12 +223,6 @@ class MainWindow(QMainWindow):
         # Toggle Folders Sidebar (Ctrl+\)
         toggle_sidebar_sc = QShortcut(QKeySequence("Ctrl+\\"), self)
         toggle_sidebar_sc.activated.connect(self._toggle_sidebar)
-
-        # Collapse / Expand All Folders (Ctrl+Left)
-        collapse_all_sc = QShortcut(QKeySequence("Ctrl+Left"), self)
-        collapse_all_sc.setContext(Qt.ShortcutContext.WindowShortcut)
-        collapse_all_sc.activated.connect(self.sidebar.toggle_collapse_all_folders)
-        self._registered_shortcuts.append(collapse_all_sc)
 
         # Reload Workspace from Disk (Ctrl+R and F5)
         for reload_seq in ("Ctrl+R", "F5"):

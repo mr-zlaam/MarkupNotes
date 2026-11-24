@@ -219,7 +219,6 @@ class MarkdownEditor(QTextEdit):
     zoom_reset_requested = pyqtSignal()
     zoom_changed = pyqtSignal(int)
     word_wrap_toggled = pyqtSignal(bool)
-    collapse_all_folders_requested = pyqtSignal()
     focus_received = pyqtSignal()
     pin_active_note_requested = pyqtSignal()
     image_pasted = pyqtSignal()
@@ -3584,10 +3583,6 @@ class MarkdownEditor(QTextEdit):
                 return
 
             if not has_shift:
-                if event.key() == Qt.Key.Key_Left:
-                    self.collapse_all_folders_requested.emit()
-                    event.accept()
-                    return
                 if event.key() == Qt.Key.Key_F:
                     self.find_requested.emit(False)
                     event.accept()
@@ -4182,7 +4177,6 @@ class EditorPanel(QWidget):
     zoom_reset_requested = pyqtSignal()
     zoom_changed = pyqtSignal(int)
     word_wrap_toggled = pyqtSignal(bool)
-    collapse_all_folders_requested = pyqtSignal()
     focus_received = pyqtSignal()
     pin_active_note_requested = pyqtSignal()
     image_pasted = pyqtSignal()
@@ -4325,7 +4319,6 @@ class EditorPanel(QWidget):
         self.editor.zoom_out_requested.connect(self.zoom_out_requested.emit)
         self.editor.zoom_reset_requested.connect(self.zoom_reset_requested.emit)
         self.editor.word_wrap_toggled.connect(self.word_wrap_toggled.emit)
-        self.editor.collapse_all_folders_requested.connect(self.collapse_all_folders_requested.emit)
         self.editor.focus_received.connect(self.focus_received.emit)
         self.editor.pin_active_note_requested.connect(self.pin_active_note_requested.emit)
         self.editor.image_pasted.connect(self.image_pasted.emit)

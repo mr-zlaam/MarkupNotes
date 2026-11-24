@@ -10,6 +10,7 @@ from PyQt6.QtCore import QEvent, QMimeData, QModelIndex, QObject, QPoint, QRect,
 from PyQt6.QtGui import QColor, QDrag, QDragEnterEvent, QDragLeaveEvent, QDragMoveEvent, QDropEvent, QMouseEvent, QPainter, QPen
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QHBoxLayout,
     QLabel,
     QMenu,
@@ -564,6 +565,22 @@ class FolderSidebar(QWidget):
             and event.type() == QEvent.Type.KeyPress
         ):
             key_event = event
+            mods = key_event.modifiers()
+            ctrl_only = bool(mods & Qt.KeyboardModifier.ControlModifier) and not bool(
+                mods
+                & (
+                    Qt.KeyboardModifier.AltModifier
+                    | Qt.KeyboardModifier.MetaModifier
+                    | Qt.KeyboardModifier.ShiftModifier
+                )
+            )
+            if (
+                ctrl_only
+                and key_event.key() == Qt.Key.Key_Left
+                and QApplication.activeModalWidget() is None
+            ):
+                self.toggle_collapse_all_folders()
+                return True
             if key_event.key() == Qt.Key.Key_F2:
                 no_mod = not (
                     key_event.modifiers()
@@ -581,15 +598,6 @@ class FolderSidebar(QWidget):
                             self.rename_folder_requested.emit(folder)
                             return True
             if not self._is_selection_mode:
-                mods = key_event.modifiers()
-                ctrl_only = bool(mods & Qt.KeyboardModifier.ControlModifier) and not bool(
-                    mods
-                    & (
-                        Qt.KeyboardModifier.AltModifier
-                        | Qt.KeyboardModifier.MetaModifier
-                        | Qt.KeyboardModifier.ShiftModifier
-                    )
-                )
                 if ctrl_only:
                     current_item = self.tree_widget.currentItem()
                     folder = (
@@ -627,9 +635,26 @@ class FolderSidebar(QWidget):
         return super().eventFilter(watched, event)
 
     def keyPressEvent(self, event) -> None:
-        """Handle Escape key to cancel selection mode."""
+        """Handle Escape (selection mode) and Ctrl+Left (collapse/expand all folders) when sidebar has focus."""
         if self._is_selection_mode and event.key() == Qt.Key.Key_Escape:
             self.exit_selection_mode()
+            event.accept()
+            return
+        mods = event.modifiers()
+        ctrl_only = bool(mods & Qt.KeyboardModifier.ControlModifier) and not bool(
+            mods
+            & (
+                Qt.KeyboardModifier.AltModifier
+                | Qt.KeyboardModifier.MetaModifier
+                | Qt.KeyboardModifier.ShiftModifier
+            )
+        )
+        if (
+            ctrl_only
+            and event.key() == Qt.Key.Key_Left
+            and QApplication.activeModalWidget() is None
+        ):
+            self.toggle_collapse_all_folders()
             event.accept()
             return
         super().keyPressEvent(event)

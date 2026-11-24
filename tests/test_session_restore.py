@@ -190,17 +190,56 @@ class TestSessionRestore(unittest.TestCase):
             self.assertTrue(win2.sidebar.are_all_folders_collapsed())
             self.assertEqual(win2.sidebar.collapse_all_btn.toolTip(), "Expand All Folders (Ctrl+Left)")
 
-            # Ctrl+Left from sidebar expands all
+            # Ctrl+Left from sidebar tree expands all
+            win2.sidebar.tree_widget.setFocus()
+            self.app.processEvents()
             QTest.keyClick(win2.sidebar.tree_widget, Qt.Key.Key_Left, Qt.KeyboardModifier.ControlModifier)
             self.app.processEvents()
             self.assertFalse(win2.sidebar.are_all_folders_collapsed())
 
-            # Ctrl+Left from editor also toggles back to collapsed, then expanded again
+            # Ctrl+Left from editor must NOT collapse folders (preserves word-left navigation)
+            win2.editor.editor.setFocus()
+            self.app.processEvents()
             QTest.keyClick(win2.editor.editor, Qt.Key.Key_Left, Qt.KeyboardModifier.ControlModifier)
+            self.app.processEvents()
+            self.assertFalse(win2.sidebar.are_all_folders_collapsed())
+
+            # Ctrl+Left from note list must NOT collapse folders
+            win2.note_list.list_widget.setFocus()
+            self.app.processEvents()
+            QTest.keyClick(win2.note_list.list_widget, Qt.Key.Key_Left, Qt.KeyboardModifier.ControlModifier)
+            self.app.processEvents()
+            self.assertFalse(win2.sidebar.are_all_folders_collapsed())
+
+            # Ctrl+Left while New Folder modal dialog is open must NOT collapse folders
+            from ui.dialogs import ModernInputDialog
+            dialog = ModernInputDialog(
+                parent=win2.sidebar,
+                title="New Folder",
+                prompt="Enter folder name:",
+                icon_type="folder",
+            )
+            dialog.setModal(True)
+            dialog.show()
+            dialog.input_field.setFocus()
+            self.app.processEvents()
+            try:
+                QTest.keyClick(dialog.input_field, Qt.Key.Key_Left, Qt.KeyboardModifier.ControlModifier)
+                self.app.processEvents()
+                self.assertFalse(win2.sidebar.are_all_folders_collapsed())
+            finally:
+                dialog.close()
+                dialog.deleteLater()
+                self.app.processEvents()
+
+            # Ctrl+Left from folder pane itself collapses all, then expands again
+            win2.sidebar.setFocus()
+            self.app.processEvents()
+            QTest.keyClick(win2.sidebar, Qt.Key.Key_Left, Qt.KeyboardModifier.ControlModifier)
             self.app.processEvents()
             self.assertTrue(win2.sidebar.are_all_folders_collapsed())
 
-            QTest.keyClick(win2.editor.editor, Qt.Key.Key_Left, Qt.KeyboardModifier.ControlModifier)
+            QTest.keyClick(win2.sidebar.tree_widget, Qt.Key.Key_Left, Qt.KeyboardModifier.ControlModifier)
             self.app.processEvents()
             self.assertFalse(win2.sidebar.are_all_folders_collapsed())
         finally:
