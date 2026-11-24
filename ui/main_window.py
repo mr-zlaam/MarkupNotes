@@ -112,6 +112,7 @@ class MainWindow(QMainWindow):
         self.sidebar.folder_selected.connect(self._on_folder_selected)
         self.sidebar.create_folder_requested.connect(self._on_create_folder)
         self.sidebar.collapse_requested.connect(self._toggle_sidebar)
+        self.sidebar.reload_workspace_requested.connect(self.reload_workspace)
         self.sidebar.rename_folder_requested.connect(self._on_rename_folder)
         self.sidebar.delete_folder_requested.connect(self._on_delete_folder)
         self.sidebar.delete_folders_batch_requested.connect(self._on_delete_folders_batch)
@@ -228,6 +229,13 @@ class MainWindow(QMainWindow):
         collapse_all_sc.setContext(Qt.ShortcutContext.WindowShortcut)
         collapse_all_sc.activated.connect(self.sidebar.toggle_collapse_all_folders)
         self._registered_shortcuts.append(collapse_all_sc)
+
+        # Reload Workspace from Disk (Ctrl+R and F5)
+        for reload_seq in ("Ctrl+R", "F5"):
+            reload_sc = QShortcut(QKeySequence(reload_seq), self)
+            reload_sc.setContext(Qt.ShortcutContext.WindowShortcut)
+            reload_sc.activated.connect(self.reload_workspace)
+            self._registered_shortcuts.append(reload_sc)
 
         # Toggle Notes List (Ctrl+Shift+\)
         toggle_notes_sc = QShortcut(QKeySequence("Ctrl+Shift+\\"), self)
@@ -768,8 +776,66 @@ class MainWindow(QMainWindow):
         if self._is_saving_internally:
             return
         self.editor.clear_inactive_note_cache()
+        if self._current_folder is not None and not self._current_folder.exists():
+            self._current_folder = None
+        sort_order = self._get_sort_order()
+        self.sidebar.set_folders(
+            self.storage.get_folders(sort_order=sort_order),
+            current_selection=self._current_folder,
+            sort_order=sort_order,
+        )
+        self._update_watcher_paths()
         current_path = str(self._current_note.path) if self._current_note else None
         self._refresh_notes(preserve_path=current_path, emit_selection=False)
+
+    def reload_workspace(self) -> None:
+        """Reload folders, notes, active document, and customizations from disk to sync with other instances."""
+        # Cancel pending debounced save timers so stale local state never overwrites newer disk edits
+        self.editor._save_timer.stop()
+        self.editor._title_timer.stop()
+        self._save_queue.wait_for_done()
+
+        # Reload config and vault customizations (pins, colors) written by another instance
+        self.config_manager.load()
+        self.config_manager.resolve_vault_sync(
+            customizations_changed=True,
+            settings_changed=False,
+        )
+        self.sidebar.set_folder_colors(self.config.appearance.folder_colors)
+        self.sidebar.set_pinned_folders(self.config.general.pinned_folders)
+        self.note_list.set_note_colors(self.config.appearance.note_colors)
+
+        # Refresh folder hierarchy and watcher paths
+        if self._current_folder is not None and not self._current_folder.exists():
+            self._current_folder = None
+        sort_order = self._get_sort_order()
+        self.sidebar.set_folders(
+            self.storage.get_folders(sort_order=sort_order),
+            current_selection=self._current_folder,
+            sort_order=sort_order,
+        )
+        self._update_watcher_paths()
+
+        # Clear inactive document cache and reload active note preserving cursor & scroll
+        self.editor.clear_inactive_note_cache()
+        active_path = self._current_note.path if self._current_note is not None else None
+        if active_path is not None:
+            saved_cursor = self.editor.editor.textCursor().position()
+            saved_scroll = self.editor.editor.verticalScrollBar().value()
+            self.editor.invalidate_note_cache(active_path)
+            if active_path.exists():
+                reloaded = Note.from_file(active_path)
+                if reloaded is not None:
+                    self._current_note = reloaded
+                    self.editor.set_pending_restore_state(active_path, saved_cursor, saved_scroll)
+                    self.editor.load_note(reloaded)
+            else:
+                self._current_note = None
+                self.editor.load_note(None)
+
+        preserve = str(self._current_note.path) if self._current_note else None
+        self._refresh_notes(preserve_path=preserve, emit_selection=False)
+        self.backup_panel.refresh_status()
 
     def _clear_saving_flag(self) -> None:
         """Reset internal saving guard flag."""

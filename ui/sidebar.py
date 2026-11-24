@@ -53,6 +53,7 @@ from utils.icons import (
     create_pin_icon,
     create_plus_icon,
     create_sidebar_toggle_icon,
+    create_sync_icon,
     create_trash_icon,
     create_uncheck_icon,
 )
@@ -232,6 +233,8 @@ class FolderSidebar(QWidget):
     create_folder_requested = pyqtSignal(str, object)
     # Signal emitted when user clicks the sidebar collapse button
     collapse_requested = pyqtSignal()
+    # Signal emitted when user clicks the workspace reload/refresh button
+    reload_workspace_requested = pyqtSignal()
     # Folder management signals
     rename_folder_requested = pyqtSignal(object)  # Emits Path
     delete_folder_requested = pyqtSignal(object)  # Emits Path
@@ -344,6 +347,16 @@ class FolderSidebar(QWidget):
         self.collapse_all_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.collapse_all_btn.clicked.connect(self.toggle_collapse_all_folders)
         header_layout.addWidget(self.collapse_all_btn)
+
+        # Reload workspace from file system (sync with other open instances)
+        self.reload_btn = QPushButton(parent=normal_header_widget)
+        self.reload_btn.setObjectName("IconButton")
+        self.reload_btn.setIcon(create_sync_icon(color="#8e8e93", size=14, stroke_width=1.6))
+        self.reload_btn.setToolTip("Reload Workspace from Disk (Ctrl+R / F5)")
+        self.reload_btn.setFixedSize(26, 26)
+        self.reload_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.reload_btn.clicked.connect(self.reload_workspace_requested.emit)
+        header_layout.addWidget(self.reload_btn)
 
         # Domain-owned collapse button for Folders
         self.collapse_btn = QPushButton(parent=normal_header_widget)
