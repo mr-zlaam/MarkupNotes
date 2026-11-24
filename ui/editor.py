@@ -118,10 +118,13 @@ from utils.markdown import (
     apply_text_color_to_markdown,
     calculate_block_hanging_indent,
     expand_selection_to_color_tags,
+    find_anchor_block_number,
     find_link_at_offset,
+    find_link_details_at_offset,
     get_auto_continue_prefix,
     get_checkbox_info,
     is_checkbox_line,
+    is_internal_toc_link,
     transform_line_block_prefix,
     trim_selection_past_structural_prefixes,
 )
@@ -2678,9 +2681,69 @@ class MarkdownEditor(QTextEdit):
         offset = cursor.positionInBlock()
         return find_link_at_offset(block.text(), offset)
 
-    def _open_url(self, url: str) -> None:
-        """Open a URL in the user's default web browser."""
+    def _link_details_at_pos(
+        self, pos: QPointF | QPoint
+    ) -> Optional[tuple[int, int, str, str, int]]:
+        """Return (start, end, label, url, block_number) if viewport position is over a Markdown link."""
+        pt = pos.toPoint() if hasattr(pos, "toPoint") else pos
+        cursor = self.cursorForPosition(pt)
+        block = cursor.block()
+        if not block.isValid():
+            return None
+        offset = cursor.positionInBlock()
+        details = find_link_details_at_offset(block.text(), offset)
+        if details is None:
+            return None
+        start, end, label, url = details
+        return start, end, label, url, block.blockNumber()
+
+    def _scroll_to_anchor(
+        self,
+        anchor: str,
+        *,
+        label: str = "",
+        source_block: int = -1,
+    ) -> bool:
+        """Scroll the editor viewport smoothly to the heading or anchor matching a TOC link."""
+        block_num = find_anchor_block_number(
+            self.document(),
+            anchor,
+            label=label,
+            exclude_block=source_block,
+        )
+        if block_num is None:
+            return False
+        target_block = self.document().findBlockByNumber(block_num)
+        if not target_block.isValid():
+            return False
+
+        cur = QTextCursor(target_block)
+        cur.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+        self.setTextCursor(cur)
+
+        doc_layout = self.document().documentLayout()
+        block_rect = doc_layout.blockBoundingRect(target_block)
+        vbar = self.verticalScrollBar()
+        if vbar is not None and block_rect.isValid():
+            target_y = max(0, int(round(block_rect.top() - 20.0)))
+            vbar.setValue(min(vbar.maximum(), target_y))
+        else:
+            self.ensureCursorVisible()
+        self.viewport().update()
+        return True
+
+    def _open_url(
+        self,
+        url: str,
+        *,
+        label: str = "",
+        source_block: int = -1,
+    ) -> None:
+        """Open an internal TOC link by scrolling to its heading, or open an external URL in browser."""
         clean_url = url.strip()
+        if is_internal_toc_link(clean_url):
+            self._scroll_to_anchor(clean_url, label=label, source_block=source_block)
+            return
         if not (
             clean_url.startswith("http://")
             or clean_url.startswith("https://")
@@ -3055,13 +3118,22 @@ class MarkdownEditor(QTextEdit):
             QToolTip.hideText()
             return
 
-        link_info = self._link_at_pos(pos)
-        if link_info is not None:
-            _, _, url = link_info
+        link_details = self._link_details_at_pos(pos)
+        if link_details is not None:
+            _, _, label, url, hovered_bn = link_details
             self.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
+            if is_internal_toc_link(url):
+                target_label = label or url
+                tip = (
+                    f"Ctrl+Click to jump to {target_label}"
+                    if hovered_bn == self.highlighter.active_block_number
+                    else f"Click to jump to {target_label}"
+                )
+            else:
+                tip = f"Ctrl+Click to open {url}"
             QToolTip.showText(
                 event.globalPosition().toPoint(),
-                f"Ctrl+Click to open {url}",
+                tip,
                 self.viewport(),
             )
             return
@@ -3091,13 +3163,22 @@ class MarkdownEditor(QTextEdit):
             pos = event.position()
             active_bn = self.highlighter.active_block_number
 
-            # 0. Ctrl+Click on link -> open in browser
+            # 0. Ctrl+Click on any link -> jump to TOC section or open in browser
             if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-                link_info = self._link_at_pos(pos)
-                if link_info is not None:
-                    _, _, url = link_info
-                    self._open_url(url)
+                link_details = self._link_details_at_pos(pos)
+                if link_details is not None:
+                    _, _, label, url, clicked_bn = link_details
+                    self._open_url(url, label=label, source_block=clicked_bn)
                     return
+
+            # 0.5 Plain single-click on an inactive TOC link (#... or relative .html) -> scroll to section
+            if not (event.modifiers() & (Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.AltModifier)):
+                link_details = self._link_details_at_pos(pos)
+                if link_details is not None:
+                    _, _, label, url, clicked_bn = link_details
+                    if is_internal_toc_link(url) and clicked_bn != active_bn:
+                        if self._scroll_to_anchor(url, label=label, source_block=clicked_bn):
+                            return
 
             # 1. Click on Code Card Copy button
             scale = getattr(self, "ui_scale", 1.0)

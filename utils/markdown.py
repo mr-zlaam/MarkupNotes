@@ -1,9 +1,10 @@
 """Utility functions for parsing and manipulating Markdown text."""
 
 import re
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
+from urllib.parse import unquote
 
-from PyQt6.QtGui import QFont, QFontMetricsF
+from PyQt6.QtGui import QFont, QFontMetricsF, QTextDocument
 
 CHECKBOX_PATTERN = re.compile(r"^(\s*)([-*+]\s*\[([ xX]?)\]\s?)(.*)$")
 LIST_PATTERN = re.compile(r"^(\s*)([-*+]|\d+\.|\d+\))(\s+)(.*)$")
@@ -83,8 +84,8 @@ def calculate_block_hanging_indent(
     return 0.0, 0.0
 
 
-def find_link_at_offset(text: str, offset: int) -> Optional[Tuple[int, int, str]]:
-    """Return (start, end, url) if offset falls within a Markdown link or URL in text."""
+def find_link_details_at_offset(text: str, offset: int) -> Optional[Tuple[int, int, str, str]]:
+    """Return (start, end, label, url) if offset falls within a Markdown link or URL in text."""
     for m in LINK_PATTERN.finditer(text):
         start, end = m.span()
         if m.group("rawurl"):
@@ -92,11 +93,22 @@ def find_link_at_offset(text: str, offset: int) -> Optional[Tuple[int, int, str]
             trimmed = raw.rstrip(".,;:!?*~'\"")
             end = start + len(trimmed)
             url = trimmed
+            label = trimmed
         else:
-            url = m.group("url") or m.group("autourl")
+            url = m.group("url") or m.group("autourl") or ""
+            label = m.group("label") or url
         if start <= offset <= end:
-            return start, end, url
+            return start, end, label, url
     return None
+
+
+def find_link_at_offset(text: str, offset: int) -> Optional[Tuple[int, int, str]]:
+    """Return (start, end, url) if offset falls within a Markdown link or URL in text."""
+    details = find_link_details_at_offset(text, offset)
+    if details is None:
+        return None
+    start, end, _, url = details
+    return start, end, url
 
 
 def is_checkbox_line(line: str) -> bool:
@@ -391,3 +403,129 @@ def apply_highlight_color_to_markdown(text: str, color: str) -> str:
         else:
             formatted_parts.append(_format_single_line_highlight_color(p, color))
     return "".join(formatted_parts)
+
+
+_HEADING_ANCHOR_RE = re.compile(r"^\s*#{1,6}\s+(.+?)\s*#*\s*$")
+_HTML_ANCHOR_ID_RE = re.compile(
+    r"""<(?:a|span|div|h[1-6])\b[^>]*\b(?:id|name)\s*=\s*["']([^"']+)["']""",
+    re.IGNORECASE,
+)
+_FENCE_TOGGLE_RE = re.compile(r"^\s*(?:>+\s*)*```")
+
+
+def is_internal_toc_link(url: str) -> bool:
+    """Return True if url is an in-document '#anchor' or EPUB-style relative '.html'/'.xhtml' TOC link."""
+    clean = url.strip()
+    if not clean:
+        return False
+    if clean.startswith("#"):
+        return True
+    lower = clean.lower()
+    if lower.startswith(("http://", "https://", "mailto:", "file://", "ftp://")):
+        return False
+    path_part = lower.split("#", 1)[0].split("?", 1)[0]
+    return path_part.endswith((".html", ".xhtml", ".htm"))
+
+
+def slugify_heading(heading_text: str) -> str:
+    """Convert Markdown heading text into a GitHub-compatible lowercase anchor slug."""
+    cleaned = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", heading_text)
+    cleaned = re.sub(r"<[^>]+>", "", cleaned)
+    cleaned = re.sub(r"[*_~`]+", "", cleaned)
+    cleaned = (
+        cleaned.replace("\u2019", "'")
+        .replace("\u2018", "'")
+        .replace("\u201c", '"')
+        .replace("\u201d", '"')
+    )
+    cleaned = cleaned.strip().lower()
+    cleaned = re.sub(r"[^\w\s-]", "", cleaned)
+    cleaned = re.sub(r"\s+", "-", cleaned)
+    return cleaned.strip("-")
+
+
+def find_anchor_block_number(
+    doc: QTextDocument,
+    anchor: str,
+    *,
+    label: str = "",
+    exclude_block: int = -1,
+) -> Optional[int]:
+    """Find the block number matching a TOC anchor ('#slug' or 'page-89.html') or link label text.
+
+    Supports GitHub-style heading slugs (including duplicate '-1'/'-2' suffixes),
+    explicit HTML id/name anchors, and EPUB-style label-to-heading matching while skipping code blocks.
+    """
+    raw_anchor = unquote(anchor.strip())
+    fragment = ""
+    if "#" in raw_anchor:
+        fragment = raw_anchor.split("#", 1)[1].strip().lower()
+    elif raw_anchor.startswith("#"):
+        fragment = raw_anchor[1:].strip().lower()
+
+    file_target = raw_anchor.split("#", 1)[0].split("?", 1)[0].strip().lower()
+    file_stem = file_target.rsplit(".", 1)[0] if "." in file_target else file_target
+
+    target = fragment or file_target
+    target_collapsed = re.sub(r"-+", "-", target) if target else ""
+    label_slug = slugify_heading(label) if label else ""
+    label_lower = label.strip().lower() if label else ""
+
+    if not target and not label_slug:
+        return None
+
+    slug_counts: Dict[str, int] = {}
+    in_code_block = False
+    label_heading_block: Optional[int] = None
+    label_text_block: Optional[int] = None
+    fallback_block: Optional[int] = None
+
+    block = doc.firstBlock()
+    while block.isValid():
+        bn = block.blockNumber()
+        text = block.text()
+        if _FENCE_TOGGLE_RE.match(text):
+            in_code_block = not in_code_block
+            block = block.next()
+            continue
+
+        if not in_code_block and bn != exclude_block:
+            # 1. Explicit HTML id/name anchor match
+            if target and "<" in text and ("id=" in text.lower() or "name=" in text.lower()):
+                for m_id in _HTML_ANCHOR_ID_RE.finditer(text):
+                    val = m_id.group(1).strip().lower()
+                    if val == target or (file_stem and val == file_stem):
+                        return bn
+
+            # 2. Markdown heading match
+            hm = _HEADING_ANCHOR_RE.match(text)
+            if hm:
+                heading_body = hm.group(1)
+                base_slug = slugify_heading(heading_body)
+                if base_slug:
+                    seen_count = slug_counts.get(base_slug, 0)
+                    slug_counts[base_slug] = seen_count + 1
+                    candidate_slug = base_slug if seen_count == 0 else f"{base_slug}-{seen_count}"
+                    if fragment and candidate_slug == fragment:
+                        return bn
+                    if label_slug and label_heading_block is None and base_slug == label_slug:
+                        label_heading_block = bn
+                    if fallback_block is None and target:
+                        collapsed = re.sub(r"-+", "-", candidate_slug)
+                        if collapsed == target_collapsed or heading_body.strip().lower() == target:
+                            fallback_block = bn
+            elif label_slug and label_text_block is None and "[" not in text:
+                # 3. Fallback for EPUB-converted plain chapter title lines without '#' prefix
+                stripped = text.strip()
+                if stripped and (
+                    stripped.lower() == label_lower or slugify_heading(stripped) == label_slug
+                ):
+                    label_text_block = bn
+
+        block = block.next()
+
+    if label_heading_block is not None:
+        return label_heading_block
+    if fallback_block is not None:
+        return fallback_block
+    return label_text_block
