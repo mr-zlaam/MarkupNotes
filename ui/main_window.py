@@ -564,6 +564,10 @@ class MainWindow(QMainWindow):
         """Load folders and restore the user's last active folder, note, cursor, and scroll offset."""
         self._is_initializing = True
         try:
+            self.config_manager.set_vault_dir(self.storage.root_dir)
+            if self.config_manager.sync_vault_on_open():
+                self.config = self.config_manager.settings
+                self._apply_ui_scale(self.config.general.ui_scale)
             sort_order = self._get_sort_order()
             self._applied_sort_order = sort_order
             self.sidebar.set_root_dir(self.storage.root_dir)
@@ -631,9 +635,15 @@ class MainWindow(QMainWindow):
 
         # Case 1: Target is a directory -> open directory as notes root
         if path.is_dir():
-            sort_order = self._get_sort_order()
             self.storage.root_dir = path
+            self.config_manager.set_vault_dir(path)
+            self.config_manager.sync_vault_on_open()
+            self.config = self.config_manager.settings
+            sort_order = self._get_sort_order()
             self.sidebar.set_root_dir(path)
+            self.sidebar.set_pinned_folders(self.config.general.pinned_folders)
+            self.sidebar.set_folder_colors(self.config.appearance.folder_colors)
+            self.note_list.set_note_colors(self.config.appearance.note_colors)
             folders = self.storage.get_folders(sort_order=sort_order)
             self.sidebar.set_folders(folders, sort_order=sort_order)
             self._current_folder = None
@@ -1430,9 +1440,36 @@ class MainWindow(QMainWindow):
         """Execute quick cloud sync (Ctrl+Shift+S)."""
         self.backup_panel.trigger_sync()
 
+    def _ask_settings_conflict_resolution(self) -> bool:
+        """Prompt user to choose between backed-up remote settings and modified local settings."""
+        return ModernConfirmDialog.ask(
+            self,
+            title="Settings Conflict Detected",
+            message=(
+                "Your local settings differ from the backed-up settings pulled from GitHub.\n\n"
+                "Which settings would you like to keep?"
+            ),
+            confirm_text="Use Backup Settings",
+            cancel_text="Keep Local Settings",
+            is_destructive=False,
+        )
+
     def _on_sync_completed(self, success: bool, message: str) -> None:
-        """Refresh sidebar folders and note list when remote notes are imported or synchronized."""
+        """Refresh sidebar folders, note list, and synced customizations/settings after Git sync."""
         if success:
+            cust_changed, sett_changed = self.backup_panel.last_sync_vault_changes()
+            cust_updated, sett_updated = self.config_manager.resolve_vault_sync(
+                customizations_changed=cust_changed,
+                settings_changed=sett_changed,
+                ask_conflict_fn=self._ask_settings_conflict_resolution,
+            )
+            if cust_updated:
+                self.sidebar.set_folder_colors(self.config.appearance.folder_colors)
+                self.sidebar.set_pinned_folders(self.config.general.pinned_folders)
+                self.note_list.set_note_colors(self.config.appearance.note_colors)
+            if sett_updated:
+                self._on_settings_updated()
+
             self.editor.clear_inactive_note_cache()
             sort_order = self._get_sort_order()
             self.sidebar.set_folders(

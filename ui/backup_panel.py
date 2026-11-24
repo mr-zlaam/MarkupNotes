@@ -24,6 +24,11 @@ from core.config import ConfigManager
 from core.git_manager import GitCommit, GitManager, GitStatus
 from core.github_client import GitHubClient
 from core.storage import StorageManager
+from core.vault_sync import (
+    file_sha256,
+    get_vault_customizations_path,
+    get_vault_settings_path,
+)
 from ui.github_auth_dialog import ModernGitHubAuthDialog
 from utils.icons import (
     create_backup_icon,
@@ -222,6 +227,8 @@ class BackupPanel(QWidget):
         self.git_manager = GitManager(self.storage.root_dir)
         self.github_client = GitHubClient()
         self._sync_thread: Optional[SyncWorker] = None
+        self._pre_sync_vault_hashes: tuple[Optional[str], Optional[str]] = (None, None)
+        self._last_sync_vault_changes: tuple[bool, bool] = (False, False)
 
         self._auto_backup_timer = QTimer(self)
         self._auto_backup_timer.setSingleShot(True)
@@ -615,7 +622,15 @@ class BackupPanel(QWidget):
                 self._add_history_item(c)
 
     def _add_change_item(self, rel_path: str, badge: str) -> None:
-        item = QListWidgetItem(Path(rel_path).name)
+        norm = rel_path.replace("\\", "/")
+        if norm.endswith(".markup-notes/customizations.json"):
+            label = "Customizations"
+        elif norm.endswith(".markup-notes/settings.json"):
+            label = "App Settings"
+        else:
+            label = Path(rel_path).name
+        item = QListWidgetItem(label)
+        item.setToolTip(rel_path)
         item.setData(Qt.ItemDataRole.UserRole, rel_path)
         item.setData(Qt.ItemDataRole.UserRole + 1, badge)
         self.changes_list.addItem(item)
@@ -644,10 +659,20 @@ class BackupPanel(QWidget):
                 self.refresh_status()
                 self.trigger_sync()
 
+    def last_sync_vault_changes(self) -> tuple[bool, bool]:
+        """Return (customizations_changed, settings_changed) from the most recent sync."""
+        return self._last_sync_vault_changes
+
     def trigger_sync(self) -> None:
         """Trigger background asynchronous sync without freezing GUI."""
         if self._sync_thread and self._sync_thread.isRunning():
             return
+
+        self._pre_sync_vault_hashes = (
+            file_sha256(get_vault_customizations_path(self.storage.root_dir)),
+            file_sha256(get_vault_settings_path(self.storage.root_dir)),
+        )
+        self._last_sync_vault_changes = (False, False)
 
         self.btn_sync.setEnabled(False)
         self.btn_sync.setText("Syncing with GitHub...")
@@ -660,6 +685,14 @@ class BackupPanel(QWidget):
         self._sync_thread.start()
 
     def _on_sync_finished(self, success: bool, message: str) -> None:
+        if success:
+            post_cust = file_sha256(get_vault_customizations_path(self.storage.root_dir))
+            post_sett = file_sha256(get_vault_settings_path(self.storage.root_dir))
+            pre_cust, pre_sett = self._pre_sync_vault_hashes
+            self._last_sync_vault_changes = (
+                post_cust is not None and post_cust != pre_cust,
+                post_sett is not None and post_sett != pre_sett,
+            )
         self.btn_sync.setEnabled(True)
         self.btn_sync.setText("☁  Sync Notes")
         self.refresh_status()

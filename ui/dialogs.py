@@ -476,6 +476,7 @@ class ModernConfirmDialog(QDialog):
         is_destructive: bool = True,
         custom_icon: Optional[QIcon] = None,
         dialog_width: int = 450,
+        cancel_text: str = "Cancel",
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(title)
@@ -634,6 +635,7 @@ class ModernConfirmDialog(QDialog):
         is_destructive: bool = True,
         custom_icon: Optional[QIcon] = None,
         dialog_width: int = 450,
+        cancel_text: str = "Cancel",
     ) -> bool:
         """Show modern confirmation dialog and return True if confirmed."""
         dlg = cls(
@@ -644,6 +646,7 @@ class ModernConfirmDialog(QDialog):
             is_destructive=is_destructive,
             custom_icon=custom_icon,
             dialog_width=dialog_width,
+            cancel_text=cancel_text,
         )
         return dlg.exec() == QDialog.DialogCode.Accepted
 

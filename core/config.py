@@ -5,8 +5,17 @@ import json
 import os
 from pathlib import Path
 import tempfile
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
+from core.vault_sync import (
+    apply_vault_customizations,
+    apply_vault_settings,
+    are_local_settings_default,
+    export_vault_backup,
+    extract_portable_settings,
+    read_vault_customizations,
+    read_vault_settings,
+)
 from utils.paths import get_config_dir
 from utils.sorting import DEFAULT_SORT_ORDER, VALID_SORT_ORDERS, normalize_sort_order
 
@@ -203,7 +212,13 @@ class ConfigManager:
         else:
             self.config_path = get_config_dir() / "settings.json"
 
+        self._vault_dir: Optional[Path] = None
+        self._suppress_vault_export: bool = False
         self.settings: AppSettings = self.load()
+
+    def set_vault_dir(self, vault_dir: Optional[Path]) -> None:
+        """Set workspace root directory used to mirror portable customizations and settings."""
+        self._vault_dir = vault_dir
 
     def load(self) -> AppSettings:
         """Load settings from JSON file, returning defaults if file does not exist or fails."""
@@ -247,6 +262,8 @@ class ConfigManager:
                 temp_name = tf.name
 
             os.replace(temp_name, self.config_path)
+            if self._vault_dir is not None and not self._suppress_vault_export:
+                export_vault_backup(self.settings, self._vault_dir)
             return True
         except OSError:
             return False
@@ -482,6 +499,91 @@ class ConfigManager:
             self.settings.session.collapsed_folders = list(collapsed_folders)
         if save:
             self.save()
+
+    def export_to_vault(self) -> None:
+        """Mirror current customizations and portable settings to the active vault."""
+        if self._vault_dir is not None:
+            export_vault_backup(self.settings, self._vault_dir)
+
+    def sync_vault_on_open(self) -> bool:
+        """Import vault customizations/settings on fresh setups, or export local state to vault."""
+        if self._vault_dir is None:
+            return False
+
+        changed = False
+        has_local_custom = bool(
+            self.settings.appearance.folder_colors
+            or self.settings.appearance.note_colors
+            or self.settings.general.pinned_notes
+            or self.settings.general.pinned_folders
+        )
+        vault_custom = read_vault_customizations(self._vault_dir)
+        if vault_custom is not None and not has_local_custom:
+            apply_vault_customizations(self.settings, vault_custom, self._vault_dir)
+            changed = True
+
+        vault_settings = read_vault_settings(self._vault_dir)
+        if vault_settings is not None and are_local_settings_default(self.settings):
+            if vault_settings != extract_portable_settings(self.settings):
+                self.settings = apply_vault_settings(self.settings, vault_settings)
+                changed = True
+
+        if changed:
+            self._suppress_vault_export = True
+            try:
+                self.save()
+            finally:
+                self._suppress_vault_export = False
+
+        self.export_to_vault()
+        return changed
+
+    def resolve_vault_sync(
+        self,
+        *,
+        customizations_changed: bool,
+        settings_changed: bool,
+        ask_conflict_fn: Optional[Callable[[], bool]] = None,
+    ) -> tuple[bool, bool]:
+        """Reconcile pulled vault customizations and settings with local configuration.
+
+        Returns (customizations_updated, settings_updated).
+        """
+        if self._vault_dir is None:
+            return (False, False)
+
+        cust_updated = False
+        sett_updated = False
+
+        if customizations_changed:
+            vault_custom = read_vault_customizations(self._vault_dir)
+            if vault_custom is not None:
+                apply_vault_customizations(self.settings, vault_custom, self._vault_dir)
+                cust_updated = True
+
+        if settings_changed:
+            vault_settings = read_vault_settings(self._vault_dir)
+            if vault_settings is not None:
+                local_portable = extract_portable_settings(self.settings)
+                if vault_settings != local_portable:
+                    if are_local_settings_default(self.settings):
+                        self.settings = apply_vault_settings(self.settings, vault_settings)
+                        sett_updated = True
+                    elif ask_conflict_fn is not None:
+                        if ask_conflict_fn():
+                            self.settings = apply_vault_settings(self.settings, vault_settings)
+                            sett_updated = True
+                        else:
+                            self.export_to_vault()
+
+        if cust_updated or sett_updated:
+            self._suppress_vault_export = True
+            try:
+                self.save()
+            finally:
+                self._suppress_vault_export = False
+
+        return (cust_updated, sett_updated)
 
     def reset_to_defaults(self) -> None:
         """Reset all settings to default configuration."""
