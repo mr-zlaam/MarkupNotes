@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import html
 from pathlib import Path
+import re
 import threading
 from typing import Callable, Dict, Optional, Tuple
 
@@ -12,6 +14,50 @@ SNIPPET_READ_BYTES: int = 4096
 SEARCH_CHUNK_BYTES: int = 65536
 ASYNC_SAVE_THRESHOLD_BYTES: int = 64 * 1024
 WORD_COUNT_CHUNK_CHARS: int = 65536
+
+_DECORATIVE_LINE_RE = re.compile(
+    r"^\s*(?:```.*|~~~.*|\$\$|\\+\[|\\+\]|(?:\*\s*){3,}|(?:-\s*){3,}|(?:_\s*){3,}|\|[\s:\-|]+\|?)\s*$"
+)
+_LINE_PREFIX_RE = re.compile(
+    r"^(?:\s*[-*+]\s*\[[ xX]?\]\s*|\s*[-*+]\s+|\s*\d+[.)]\s+|\s*\\?#+\s+|\s*>+\s*)+"
+)
+_IMAGE_MD_RE = re.compile(r"!\[([^\]]*)\]\([^)]*\)")
+_LINK_MD_RE = re.compile(r"\[([^\]]+)\]\([^)]*\)")
+_AUTOLINK_RE = re.compile(r"<((?:https?|ftp)://[^\s>]+)>", re.IGNORECASE)
+_HTML_TAG_RE = re.compile(r"<[a-zA-Z!/][^>]*>")
+_BOLD_MARK_RE = re.compile(r"(\*\*|__)(.+?)\1")
+_INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
+_STRIKE_HIGHLIGHT_RE = re.compile(r"(~{1,2}|==)(.+?)\1")
+_ITALIC_STAR_RE = re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)")
+_ITALIC_UNDER_RE = re.compile(r"(?<!\w)_([^_\n]+)_(?!\w)")
+_LEFTOVER_MARKERS_RE = re.compile(r"(\*\*|__|~~|==|`)")
+_MULTISPACE_RE = re.compile(r"\s+")
+
+
+def clean_markdown_preview_line(raw_line: str) -> str:
+    """Strip HTML tags and Markdown syntax from a single line for card previews."""
+    stripped = raw_line.strip()
+    if not stripped or _DECORATIVE_LINE_RE.match(stripped):
+        return ""
+
+    text = _LINE_PREFIX_RE.sub("", stripped)
+    text = _IMAGE_MD_RE.sub(r"\1", text)
+    text = _LINK_MD_RE.sub(r"\1", text)
+    text = _AUTOLINK_RE.sub(r"\1", text)
+    text = _HTML_TAG_RE.sub("", text)
+
+    if text.lstrip().startswith("|"):
+        text = text.strip().strip("|")
+        text = re.sub(r"\s*\|\s*", " ", text)
+
+    text = _BOLD_MARK_RE.sub(r"\2", text)
+    text = _INLINE_CODE_RE.sub(r"\1", text)
+    text = _STRIKE_HIGHLIGHT_RE.sub(r"\2", text)
+    text = _ITALIC_STAR_RE.sub(r"\1", text)
+    text = _ITALIC_UNDER_RE.sub(r"\1", text)
+    text = _LEFTOVER_MARKERS_RE.sub("", text)
+    text = html.unescape(text)
+    return _MULTISPACE_RE.sub(" ", text).strip()
 
 
 def read_note_head(path: Path, max_bytes: int = SNIPPET_READ_BYTES) -> str:

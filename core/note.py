@@ -5,7 +5,12 @@ import re
 from typing import Optional
 
 from utils.date_format import format_relative_time, is_date_badge_line
-from utils.note_io import SNIPPET_READ_BYTES, read_note_full, read_note_head
+from utils.note_io import (
+    SNIPPET_READ_BYTES,
+    clean_markdown_preview_line,
+    read_note_full,
+    read_note_head,
+)
 
 
 class Note:
@@ -124,40 +129,22 @@ class Note:
         Only inspects the head of the content so large documents stay O(1).
         """
         head = content[:SNIPPET_READ_BYTES]
-        non_empty: list[str] = []
+        cleaned_lines: list[str] = []
         for raw_line in head.splitlines():
             stripped = raw_line.strip()
-            if stripped and not is_date_badge_line(stripped):
-                non_empty.append(stripped)
-                if len(non_empty) >= 6:
+            if not stripped or is_date_badge_line(stripped):
+                continue
+            cleaned = clean_markdown_preview_line(stripped)
+            if cleaned:
+                cleaned_lines.append(cleaned)
+                if len(cleaned_lines) >= 3:
                     break
 
-        if not non_empty:
+        if not cleaned_lines:
             return fallback_title, "No additional text"
 
-        # Determine if first line duplicates the title (e.g. '# Title')
-        raw_first = non_empty[0]
-        cleaned_first = re.sub(
-            r"^(\s*[-*+]\s*\[[ xX]?\]\s*|\s*\\?#+\s*|\s*>+\s*)", "", raw_first
-        ).strip()
-        cleaned_first = re.sub(r"(\*\*|__|~~|`|\*)", "", cleaned_first).strip()
-
-        start_idx = 1 if cleaned_first.lower() == fallback_title.lower() else 0
-
-        # Collect subsequent lines for the snippet
-        snippet_lines = []
-        for line in non_empty[start_idx:]:
-            # Clean common markdown markers from snippet (checkboxes, bullets, headers, inline markers)
-            cleaned = re.sub(
-                r"^(\s*[-*+]\s*\[[ xX]?\]\s*|\s*[-*+]\s*|\s*\d+\.\s*|\s*\\?#+\s*|\s*>+\s*)",
-                "",
-                line,
-            ).strip()
-            cleaned = re.sub(r"(\*\*|__|~~|`|\*)", "", cleaned).strip()
-            if cleaned:
-                snippet_lines.append(cleaned)
-            if len(snippet_lines) >= 2:
-                break
-
+        # Skip leading line when it duplicates the note title (e.g. '# Title')
+        start_idx = 1 if cleaned_lines[0].lower() == fallback_title.lower() else 0
+        snippet_lines = cleaned_lines[start_idx : start_idx + 2]
         snippet = " ".join(snippet_lines) if snippet_lines else "No additional text"
         return fallback_title, snippet
