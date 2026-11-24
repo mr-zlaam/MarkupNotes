@@ -57,6 +57,7 @@ SHORTCUT_GROUPS: List[Tuple[str, List[Tuple[str, str, List[str]]]]] = [
             ("New Note", "Create a new note in the active folder", ["Ctrl", "N"]),
             ("New Folder", "Create a new folder or subfolder", ["Ctrl", "Shift", "N"]),
             ("Rename Folder", "Rename the focused folder in the sidebar", ["F2"]),
+            ("Rename Note", "Rename the focused note card", ["F2"]),
             ("Delete Folder", "Prompt confirmation to delete focused folder", ["Delete"]),
             ("Delete Note", "Prompt confirmation to delete focused note card", ["Delete"]),
             ("Toggle Folder", "Single-click row to open or close subfolders", ["Click"]),

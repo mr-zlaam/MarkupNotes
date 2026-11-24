@@ -471,6 +471,22 @@ class NoteListPanel(QWidget):
             and event.type() == QEvent.Type.KeyPress
         ):
             key_event = event
+            if key_event.key() == Qt.Key.Key_F2:
+                no_mod = not (
+                    key_event.modifiers()
+                    & (
+                        Qt.KeyboardModifier.ControlModifier
+                        | Qt.KeyboardModifier.AltModifier
+                        | Qt.KeyboardModifier.MetaModifier
+                    )
+                )
+                if no_mod and not self._is_selection_mode:
+                    current_item = self.list_widget.currentItem()
+                    if current_item is not None:
+                        note = current_item.data(Qt.ItemDataRole.UserRole)
+                        if note is not None:
+                            self.rename_note_requested.emit(note)
+                            return True
             if key_event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
                 if self._is_selection_mode:
                     if self._selected_paths:

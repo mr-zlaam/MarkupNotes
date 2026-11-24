@@ -81,13 +81,47 @@ class TestF2AndAllNotesPath(unittest.TestCase):
         sidebar.deleteLater()
 
     def test_shortcuts_cheatsheet_lists_f2_rename_folder(self) -> None:
-        """Verify Rename Folder (F2) is documented in the shortcuts cheatsheet."""
+        """Verify Rename Folder and Rename Note (F2) are documented in the shortcuts cheatsheet."""
         entries = {
             title: keys
             for _, items in SHORTCUT_GROUPS
             for title, _, keys in items
         }
         self.assertEqual(entries.get("Rename Folder"), ["F2"])
+        self.assertEqual(entries.get("Rename Note"), ["F2"])
+
+    def test_f2_key_on_focused_note(self) -> None:
+        """Verify pressing F2 on a focused note card emits rename_note_requested."""
+        panel = NoteListPanel()
+        emitted: list[Note] = []
+        panel.rename_note_requested.connect(emitted.append)
+
+        # Empty list -> nothing emitted
+        QTest.keyClick(panel.list_widget, Qt.Key.Key_F2)
+        self.assertEqual(emitted, [])
+
+        n1 = Note.from_memory(self.notes_dir / "First.md", "one", 1000.0)
+        n2 = Note.from_memory(self.notes_dir / "Second.md", "two", 2000.0)
+        panel.set_notes([n1, n2])
+
+        panel.list_widget.setCurrentRow(1)
+        QTest.keyClick(panel.list_widget, Qt.Key.Key_F2)
+        self.assertEqual(emitted, [n2])
+
+        # Viewport event filter also triggers rename
+        QTest.keyClick(panel.list_widget.viewport(), Qt.Key.Key_F2)
+        self.assertEqual(emitted, [n2, n2])
+
+        # Ctrl+F2 ignored
+        QTest.keyClick(panel.list_widget, Qt.Key.Key_F2, Qt.KeyboardModifier.ControlModifier)
+        self.assertEqual(len(emitted), 2)
+
+        # Selection mode suppresses F2 rename
+        panel.enter_selection_mode()
+        QTest.keyClick(panel.list_widget, Qt.Key.Key_F2)
+        self.assertEqual(len(emitted), 2)
+
+        panel.deleteLater()
 
     def test_all_notes_relative_path_rendering_and_root_omission(self) -> None:
         """Verify relative path is shown in All Notes for nested files and hidden for root/folder views."""
