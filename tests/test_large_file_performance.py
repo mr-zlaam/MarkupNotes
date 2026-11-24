@@ -7,7 +7,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from PyQt6.QtGui import QTextCursor
+from PyQt6.QtCore import QEvent, Qt
+from PyQt6.QtGui import QKeyEvent, QTextCursor
 from PyQt6.QtWidgets import QApplication
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -140,6 +141,41 @@ class TestLargeFilePhase1Performance(unittest.TestCase):
                 editor.setTextCursor(cur)
                 self.app.processEvents()
                 spy_refresh.assert_not_called()
+        finally:
+            editor.deleteLater()
+
+    def test_large_doc_typing_uses_fast_delta_without_to_plain_text_or_region_scan(self) -> None:
+        """Typing normal prose in a large doc must avoid toPlainText() and region timer, while keeping undo exact."""
+        editor = MarkdownEditor()
+        try:
+            body = "\n".join(f"Chapter paragraph line {i} with normal prose." for i in range(600))
+            editor.setPlainText(body)
+            self.app.processEvents()
+
+            cur = editor.textCursor()
+            cur.movePosition(QTextCursor.MoveOperation.End)
+            editor.setTextCursor(cur)
+
+            with patch.object(editor, "toPlainText", wraps=editor.toPlainText) as spy_plain:
+                for ch in "hello":
+                    ev = QKeyEvent(QEvent.Type.KeyPress, 0, Qt.KeyboardModifier.NoModifier, ch)
+                    editor.keyPressEvent(ev)
+                spy_plain.assert_not_called()
+
+            self.assertFalse(
+                editor._region_timer.isActive(),
+                "Typing plain prose must not schedule full-doc region rescan",
+            )
+            self.assertTrue(editor.toPlainText().endswith("prose.hello"))
+
+            # Undo must cleanly revert the fast-delta typed word
+            editor.undo()
+            self.assertTrue(editor.toPlainText().endswith("prose."))
+
+            # Typing a region syntax char ('|') must schedule deferred region scan
+            ev_pipe = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Bar, Qt.KeyboardModifier.NoModifier, "|")
+            editor.keyPressEvent(ev_pipe)
+            self.assertTrue(editor._region_timer.isActive())
         finally:
             editor.deleteLater()
 

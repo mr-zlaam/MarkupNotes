@@ -23,25 +23,34 @@ class UndoEntry:
 
 
 def compute_text_delta(old_text: str, new_text: str) -> Tuple[int, str, str]:
-    """Compute minimal (offset, removed, inserted) delta between two strings."""
+    """Compute minimal (offset, removed, inserted) delta using C-speed binary search."""
     old_len = len(old_text)
     new_len = len(new_text)
     limit = min(old_len, new_len)
 
-    prefix = 0
-    while prefix < limit and old_text[prefix] == new_text[prefix]:
-        prefix += 1
+    # Binary search common prefix length via C-level string slice comparisons
+    lo, hi = 0, limit
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if old_text[:mid] == new_text[:mid]:
+            lo = mid
+        else:
+            hi = mid - 1
+    prefix = lo
 
     old_rem = old_len - prefix
     new_rem = new_len - prefix
     suffix_limit = min(old_rem, new_rem)
 
-    suffix = 0
-    while (
-        suffix < suffix_limit
-        and old_text[old_len - 1 - suffix] == new_text[new_len - 1 - suffix]
-    ):
-        suffix += 1
+    # Binary search common suffix length
+    lo, hi = 0, suffix_limit
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if old_text[old_len - mid :] == new_text[new_len - mid :]:
+            lo = mid
+        else:
+            hi = mid - 1
+    suffix = lo
 
     removed = old_text[prefix : old_len - suffix]
     inserted = new_text[prefix : new_len - suffix]
@@ -98,6 +107,82 @@ class PlainTextUndoManager:
         """Record latest caret/selection coordinates when no text change occurred."""
         self._last_anchor = anchor
         self._last_pos = pos
+
+    def record_delta(
+        self,
+        offset: int,
+        removed: str,
+        inserted: str,
+        after_anchor: int,
+        after_pos: int,
+        *,
+        atomic: bool = False,
+        force_merge: bool = False,
+        now: Optional[float] = None,
+    ) -> bool:
+        """Record an already-known (offset, removed, inserted) delta without scanning full text."""
+        if removed == inserted:
+            self._last_anchor = after_anchor
+            self._last_pos = after_pos
+            return False
+
+        old_text = self._current_text
+        new_text = old_text[:offset] + inserted + old_text[offset + len(removed) :]
+
+        if force_merge and self._undo_stack:
+            return self.record_change(
+                new_text,
+                after_anchor,
+                after_pos,
+                atomic=atomic,
+                force_merge=True,
+                now=now,
+            )
+
+        ts = time.monotonic() if now is None else now
+        before_anchor = self._last_anchor
+        before_pos = self._last_pos
+
+        kind = self._classify_edit(
+            removed, inserted, before_anchor, before_pos, after_pos, atomic=atomic
+        )
+
+        merged = False
+        if self._undo_stack and kind != "atomic":
+            merged = self._try_coalesce(
+                self._undo_stack[-1],
+                offset,
+                removed,
+                inserted,
+                before_pos,
+                after_anchor,
+                after_pos,
+                kind,
+                ts,
+            )
+
+        if not merged:
+            self._undo_stack.append(
+                UndoEntry(
+                    offset=offset,
+                    removed=removed,
+                    inserted=inserted,
+                    before_anchor=before_anchor,
+                    before_pos=before_pos,
+                    after_anchor=after_anchor,
+                    after_pos=after_pos,
+                    coalesce_kind=kind,
+                    timestamp=ts,
+                )
+            )
+            if len(self._undo_stack) > self._max_steps:
+                self._undo_stack.pop(0)
+
+        self._redo_stack.clear()
+        self._current_text = new_text
+        self._last_anchor = after_anchor
+        self._last_pos = after_pos
+        return True
 
     def record_change(
         self,

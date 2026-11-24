@@ -227,6 +227,7 @@ class MarkdownEditor(QTextEdit):
         self._resetting_text: bool = False
         self._cleaning_empty_tag: bool = False
         self._pending_text_mutation: bool = False
+        self._pending_changes: List[Tuple[int, int, str]] = []
         self._dirty_margin_blocks: Optional[Set[int]] = None
         self._last_block_count: int = 1
 
@@ -1388,6 +1389,7 @@ class MarkdownEditor(QTextEdit):
         self._margin_timer.stop()
         self._region_timer.stop()
         self._pending_text_mutation = False
+        self._pending_changes.clear()
         self._resetting_text = True
         try:
             super().setPlainText(text)
@@ -1435,10 +1437,13 @@ class MarkdownEditor(QTextEdit):
         self._applying_undo_redo = True
         try:
             doc = self.document()
+            old_block_count = self._last_block_count
             edit_c = QTextCursor(doc)
             edit_c.setPosition(replace_start)
+            replaced_text = ""
             if replace_end > replace_start:
                 edit_c.setPosition(replace_end, QTextCursor.MoveMode.KeepAnchor)
+                replaced_text = edit_c.selectedText().replace("\u2029", "\n")
             edit_c.insertText(replacement)
 
             doc_len = max(0, doc.characterCount() - 1)
@@ -1451,19 +1456,51 @@ class MarkdownEditor(QTextEdit):
                 target_c.setPosition(clamped_pos, QTextCursor.MoveMode.KeepAnchor)
             self.setTextCursor(target_c)
 
-            self._dirty_margin_blocks = None
+            new_block_count = doc.blockCount()
+            block_delta = abs(new_block_count - old_block_count)
+            self._last_block_count = new_block_count
+
+            b_start = doc.findBlock(min(replace_start, doc_len))
+            b_end = doc.findBlock(min(replace_start + len(replacement), doc_len))
+            if (
+                block_delta <= 5
+                and b_start.isValid()
+                and b_end.isValid()
+                and (b_end.blockNumber() - b_start.blockNumber()) <= 25
+            ):
+                self._dirty_margin_blocks = set(
+                    range(max(0, b_start.blockNumber() - 1), b_end.blockNumber() + 2)
+                )
+            else:
+                self._dirty_margin_blocks = None
+
             self._update_block_margins()
             self._margin_timer.stop()
-            self._region_timer.stop()
-            self._last_block_count = doc.blockCount()
-            self.highlighter.active_block_number = target_c.block().blockNumber()
+            b_cur = target_c.block()
+            self.highlighter.active_block_number = b_cur.blockNumber()
             self.highlighter.cursor_pos_in_block = target_c.positionInBlock()
-            changed = self.highlighter.refresh_regions()
+
+            if new_block_count > 400:
+                needs_region_scan = (
+                    (block_delta > 0 and self._has_any_regions())
+                    or self._text_may_affect_regions(replacement)
+                    or self._text_may_affect_regions(replaced_text)
+                    or self._text_may_affect_regions(b_cur.text())
+                )
+                if needs_region_scan:
+                    self._region_timer.setInterval(600 if new_block_count > 2000 else 150)
+                    self._region_timer.start()
+                else:
+                    self._region_timer.stop()
+                changed = self.highlighter.update_active_modes()
+            else:
+                self._region_timer.stop()
+                changed = self.highlighter.refresh_regions()
+
             for b_num in changed:
                 b = doc.findBlockByNumber(b_num)
                 if b.isValid():
                     self.highlighter.rehighlightBlock(b)
-            b_cur = target_c.block()
             if b_cur.isValid():
                 self.highlighter.rehighlightBlock(b_cur)
             self.ensureCursorVisible()
@@ -1508,17 +1545,50 @@ class MarkdownEditor(QTextEdit):
         else:
             super().insertFromMimeData(source)
 
+    @staticmethod
+    def _text_may_affect_regions(text: str) -> bool:
+        """Return True if a substring or line contains characters that can trigger region cards."""
+        if not text:
+            return False
+        if "|" in text or "$" in text or "`" in text or "<" in text:
+            return True
+        lower = text.lower()
+        return "youtu" in lower or "date" in lower
+
+    def _has_any_regions(self) -> bool:
+        """Return True if the highlighter currently tracks any multi-line or card regions."""
+        hl = self.highlighter
+        return bool(
+            hl.table_regions
+            or hl.math_regions
+            or hl.mermaid_regions
+            or hl.code_regions
+            or hl.video_regions
+            or hl.date_blocks
+        )
+
     def _on_document_contents_change(
         self, position: int, chars_removed: int, chars_added: int
     ) -> None:
-        """Track genuine text mutations and dirty block indices in O(1) before contentsChanged."""
+        """Track genuine text mutations, inserted deltas, and dirty block indices in O(1)."""
         if self._updating_margins or self._resetting_text or self._applying_undo_redo:
             return
         if chars_removed > 0 or chars_added > 0:
             self._pending_text_mutation = True
             doc = self.document()
+            doc_len = max(0, doc.characterCount() - 1)
+            inserted = ""
+            if chars_added > 0:
+                end_pos = min(position + chars_added, doc_len)
+                if end_pos > position:
+                    c = QTextCursor(doc)
+                    c.setPosition(position)
+                    c.setPosition(end_pos, QTextCursor.MoveMode.KeepAnchor)
+                    inserted = c.selectedText().replace("\u2029", "\n")
+            self._pending_changes.append((position, chars_removed, inserted))
+
             b_start = doc.findBlock(position)
-            b_end = doc.findBlock(position + chars_added)
+            b_end = doc.findBlock(min(position + chars_added, doc_len))
             if b_start.isValid() and b_end.isValid():
                 s_num = b_start.blockNumber()
                 e_num = b_end.blockNumber()
@@ -1532,9 +1602,11 @@ class MarkdownEditor(QTextEdit):
                 self._dirty_margin_blocks = None
 
     def _on_contents_changed(self) -> None:
-        """Recompute regions, record clean text diffs for undo/redo, and schedule dirty-block margins."""
+        """Recompute regions, record O(1) text diffs for undo/redo, and schedule dirty-block margins."""
         had_text_mutation = self._pending_text_mutation
+        pending_changes = self._pending_changes
         self._pending_text_mutation = False
+        self._pending_changes = []
 
         if self._updating_margins or self._resetting_text:
             return
@@ -1543,10 +1615,13 @@ class MarkdownEditor(QTextEdit):
 
         doc = self.document()
         cursor = self.textCursor()
-        cur_bn = cursor.block().blockNumber()
+        cur_block = cursor.block()
+        cur_bn = cur_block.blockNumber()
         new_block_count = doc.blockCount()
         block_delta = abs(new_block_count - self._last_block_count)
         self._last_block_count = new_block_count
+        removed_sample = ""
+        inserted_sample = ""
 
         if not self._applying_undo_redo:
             if block_delta > 5:
@@ -1559,18 +1634,53 @@ class MarkdownEditor(QTextEdit):
                 self._schedule_margin_update(blocks=dirty)
 
             if had_text_mutation:
-                self.undo_manager.record_change(
-                    self.toPlainText(),
-                    cursor.anchor(),
-                    cursor.position(),
-                    force_merge=self._cleaning_empty_tag,
-                )
+                doc_len = max(0, doc.characterCount() - 1)
+                used_fast_delta = False
+                if len(pending_changes) == 1:
+                    pos, rem_len, ins = pending_changes[0]
+                    cur_text = self.undo_manager.current_text
+                    # Exact 1:1 offset match holds whenever the document has no UTF-16 surrogate pairs
+                    if (
+                        0 <= pos <= len(cur_text)
+                        and pos + rem_len <= len(cur_text)
+                        and (len(cur_text) - rem_len + len(ins) == doc_len)
+                    ):
+                        rem = cur_text[pos : pos + rem_len]
+                        removed_sample = rem
+                        inserted_sample = ins
+                        self.undo_manager.record_delta(
+                            pos,
+                            rem,
+                            ins,
+                            cursor.anchor(),
+                            cursor.position(),
+                            force_merge=self._cleaning_empty_tag,
+                        )
+                        used_fast_delta = True
+
+                if not used_fast_delta:
+                    for _, _, ins in pending_changes:
+                        inserted_sample += ins
+                    self.undo_manager.record_change(
+                        self.toPlainText(),
+                        cursor.anchor(),
+                        cursor.position(),
+                        force_merge=self._cleaning_empty_tag,
+                    )
 
         self.highlighter.active_block_number = cur_bn
         self.highlighter.cursor_pos_in_block = cursor.positionInBlock()
 
         if new_block_count > 400 and not self._applying_undo_redo:
-            self._region_timer.start()
+            needs_region_scan = (
+                (block_delta > 0 and self._has_any_regions())
+                or self._text_may_affect_regions(inserted_sample)
+                or self._text_may_affect_regions(removed_sample)
+                or self._text_may_affect_regions(cur_block.text())
+            )
+            if needs_region_scan:
+                self._region_timer.setInterval(600 if new_block_count > 2000 else 150)
+                self._region_timer.start()
         else:
             self._region_timer.stop()
             changed = self.highlighter.refresh_regions()
@@ -3552,9 +3662,10 @@ class EditorPanel(QWidget):
         self._current_note: Optional[Note] = None
 
         # Debounce timer for smooth non-blocking auto-save of body content
+        self._base_save_delay_ms: int = 400
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
-        self._save_timer.setInterval(400)
+        self._save_timer.setInterval(self._base_save_delay_ms)
         self._save_timer.timeout.connect(self._trigger_auto_save)
 
         # Debounce timer for note title editing / renaming
@@ -3996,11 +4107,19 @@ class EditorPanel(QWidget):
         return self.editor.toPlainText()
 
     def _on_text_changed(self) -> None:
-        if self.editor.document().blockCount() > 400:
+        block_count = self.editor.document().blockCount()
+        if block_count > 2000:
+            self._word_count_timer.setInterval(900)
             self._word_count_timer.start()
+            self._save_timer.setInterval(max(self._base_save_delay_ms, 1500))
+        elif block_count > 400:
+            self._word_count_timer.setInterval(300)
+            self._word_count_timer.start()
+            self._save_timer.setInterval(self._base_save_delay_ms)
         else:
             self._word_count_timer.stop()
             self._update_word_count()
+            self._save_timer.setInterval(self._base_save_delay_ms)
         self._save_timer.start()
         if hasattr(self, "find_replace_bar") and self.find_replace_bar.isVisible() and self.find_replace_bar.find_input.text():
             self.find_replace_bar.retrigger_search()
@@ -4058,7 +4177,8 @@ class EditorPanel(QWidget):
         self.editor.set_ui_scale(ui_scale)
 
         if hasattr(config, "editor"):
-            self._save_timer.setInterval(config.editor.auto_save_delay_ms)
+            self._base_save_delay_ms = config.editor.auto_save_delay_ms
+            self._save_timer.setInterval(self._base_save_delay_ms)
             scaled_font_size = max(8, int(round(config.editor.font_size * ui_scale)))
             self.editor._font_size_pt = scaled_font_size
             if config.editor.font_family and config.editor.font_family != "System":
