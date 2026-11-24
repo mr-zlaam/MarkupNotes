@@ -334,7 +334,8 @@ def create_github_icon(color: str = "#ffffff", size: int = 16) -> QIcon:
 
     renderer = QSvgRenderer(QByteArray(svg_data.encode("utf-8")))
     painter = QPainter(pixmap)
-    renderer.render(painter)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    renderer.render(painter, QRectF(0.0, 0.0, float(size), float(size)))
     painter.end()
 
     return QIcon(pixmap)
