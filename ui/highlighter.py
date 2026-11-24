@@ -19,7 +19,7 @@ from utils.code_engine import (
     CodeRegion,
     find_code_regions,
 )
-from utils.date_format import parse_date_string
+from utils.date_format import DATE_BADGE_PATTERN as DATE_PATTERN, parse_date_string
 from utils.video_engine import (
     VideoRegion,
     find_video_regions,
@@ -51,7 +51,6 @@ QUOTE_RE = re.compile(r"^((?:>\s*)+)(.*)$")
 LIST_RE = re.compile(r"^(\s*)([-*+]|\d+\.|\d+\))(\s+)(.*)$")
 HR_RE = re.compile(r"^(?:(?:\s*\*){3,}|\s*(?:-\s*){3,}|\s*(?:_\s*){3,})\s*$")
 FENCE_RE = re.compile(r"^\s*(?:>+\s*)*```.*$")
-DATE_PATTERN = re.compile(r"^\s*(?:@date\(([^)]+)\)|\[date:\s*([^\]]+)\]|@date:\s*([^\s]+))\s*$", re.IGNORECASE)
 
 BOLD_RE = re.compile(r"(\*\*|__)(.+?)\1")
 ITALIC_RE = re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)")

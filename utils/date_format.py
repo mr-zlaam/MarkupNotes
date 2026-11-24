@@ -1,7 +1,18 @@
 """Utility functions for human-readable relative timestamp formatting."""
 
 from datetime import date, datetime, timedelta, timezone
+import re
 from typing import Optional
+
+DATE_BADGE_PATTERN = re.compile(
+    r"^\s*(?:@date\(([^)]+)\)|\[date:\s*([^\]]+)\]|@date:\s*([^\s]+))\s*$",
+    re.IGNORECASE,
+)
+
+
+def is_date_badge_line(line: str) -> bool:
+    """Return True if `line` is a standalone dynamic date badge token."""
+    return DATE_BADGE_PATTERN.match(line) is not None
 
 
 def format_dynamic_date(target_date: date) -> str:

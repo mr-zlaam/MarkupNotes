@@ -7,11 +7,12 @@ from PyQt6.QtCore import QPointF, QRectF, Qt
 from PyQt6.QtGui import QColor, QImage, QPainter, QTextCursor
 from PyQt6.QtWidgets import QApplication
 
+from core.note import Note
 from ui.date_picker import ModernDatePickerDialog
 from ui.editor import MarkdownEditor
 from ui.slash_menu import COMMANDS, SlashCommand
 from utils.date_card import render_date_card
-from utils.date_format import format_dynamic_date, parse_date_string
+from utils.date_format import format_dynamic_date, is_date_badge_line, parse_date_string
 
 
 class TestDateFormatUtils(unittest.TestCase):
@@ -42,6 +43,33 @@ class TestDateFormatUtils(unittest.TestCase):
         self.assertEqual(parse_date_string("29 November 2026"), date(2026, 11, 29))
         self.assertIsNone(parse_date_string("not-a-date"))
         self.assertIsNone(parse_date_string(""))
+
+    def test_snippet_skips_leading_date_badges(self) -> None:
+        """Verify note list preview skips leading @date(...) lines and uses following text."""
+        self.assertTrue(is_date_badge_line("@date(2026-11-24)"))
+        self.assertTrue(is_date_badge_line("[date: 2026-11-24]"))
+        self.assertFalse(is_date_badge_line("Meeting @date(2026-11-24) notes"))
+
+        # Date on first line -> skipped in snippet
+        _, snippet1 = Note.parse_title_and_snippet(
+            "@date(2026-11-24)\nProject roadmap discussion\nAction items",
+            fallback_title="Standup",
+        )
+        self.assertEqual(snippet1, "Project roadmap discussion Action items")
+
+        # Title on line 1, date on line 2 -> both skipped in snippet
+        _, snippet2 = Note.parse_title_and_snippet(
+            "# Standup\n@date(2026-11-24)\nReviewed sprint backlog",
+            fallback_title="Standup",
+        )
+        self.assertEqual(snippet2, "Reviewed sprint backlog")
+
+        # Only date badge in file -> falls back cleanly
+        _, snippet3 = Note.parse_title_and_snippet(
+            "@date(2026-11-24)\n",
+            fallback_title="Standup",
+        )
+        self.assertEqual(snippet3, "No additional text")
 
 
 class TestDatePickerDialog(unittest.TestCase):

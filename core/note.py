@@ -4,7 +4,7 @@ from pathlib import Path
 import re
 from typing import Optional
 
-from utils.date_format import format_relative_time
+from utils.date_format import format_relative_time, is_date_badge_line
 from utils.note_io import SNIPPET_READ_BYTES, read_note_full, read_note_head
 
 
@@ -127,7 +127,7 @@ class Note:
         non_empty: list[str] = []
         for raw_line in head.splitlines():
             stripped = raw_line.strip()
-            if stripped:
+            if stripped and not is_date_badge_line(stripped):
                 non_empty.append(stripped)
                 if len(non_empty) >= 6:
                     break
