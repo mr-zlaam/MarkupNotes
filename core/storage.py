@@ -8,6 +8,7 @@ from typing import List, Optional
 
 from core.note import Note
 from utils.paths import get_default_notes_dir
+from utils.sorting import DEFAULT_SORT_ORDER, sort_folders, sort_notes
 
 
 class StorageManager:
@@ -17,18 +18,18 @@ class StorageManager:
         self.root_dir = root_dir if root_dir is not None else get_default_notes_dir()
         self.root_dir.mkdir(parents=True, exist_ok=True)
 
-    def get_folders(self) -> List[Path]:
-        """Return all subdirectories under root_dir recursively (excluding hidden/trash)."""
+    def get_folders(self, sort_order: str = DEFAULT_SORT_ORDER) -> List[Path]:
+        """Return all subdirectories under root_dir recursively sorted per sort_order."""
         folders: List[Path] = []
         try:
-            for item in sorted(self.root_dir.rglob("*")):
+            for item in self.root_dir.rglob("*"):
                 if item.is_dir():
                     rel_parts = item.relative_to(self.root_dir).parts
                     if not any(part.startswith(".") for part in rel_parts):
                         folders.append(item)
         except (PermissionError, FileNotFoundError):
             pass
-        return folders
+        return sort_folders(folders, sort_order=sort_order)
 
     def create_folder(
         self, folder_name: str, parent_folder: Optional[Path] = None
@@ -57,10 +58,14 @@ class StorageManager:
         except (PermissionError, OSError, FileExistsError):
             return None
 
-    def list_notes(self, folder: Optional[Path] = None) -> List[Note]:
+    def list_notes(
+        self,
+        folder: Optional[Path] = None,
+        sort_order: str = DEFAULT_SORT_ORDER,
+    ) -> List[Note]:
         """List all markdown notes in the specified folder (or all notes recursively if None).
 
-        Returns notes sorted by most recently modified first.
+        Returns notes sorted according to `sort_order`.
         """
         if folder is None:
             notes: List[Note] = []
@@ -74,8 +79,7 @@ class StorageManager:
                         notes.append(note)
             except (PermissionError, OSError):
                 return []
-            notes.sort(key=lambda n: n.modified_at, reverse=True)
-            return notes
+            return sort_notes(notes, sort_order=sort_order)
 
         if not folder.exists() or not folder.is_dir():
             return []
@@ -91,8 +95,7 @@ class StorageManager:
         except (PermissionError, OSError):
             return []
 
-        notes.sort(key=lambda n: n.modified_at, reverse=True)
-        return notes
+        return sort_notes(notes, sort_order=sort_order)
 
     def create_note(self, folder: Optional[Path] = None, initial_title: str = "Untitled") -> Optional[Note]:
         """Create a new empty markdown note file and return its Note instance."""

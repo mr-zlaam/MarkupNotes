@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
 from ui.context_menu import ModernContextMenu
 from ui.dialogs import ModernColorDialog, ModernInputDialog
 from utils.file_validator import MAX_FOLDER_NAME_LENGTH, validate_folder_name
+from utils.sorting import DEFAULT_SORT_ORDER, normalize_sort_order, sort_folders
 from utils.icons import (
     PRESET_COLORS,
     create_all_notes_icon,
@@ -60,10 +61,19 @@ class FolderSidebar(QWidget):
         super().__init__(parent=parent)
         self.ui_scale: float = 1.0
         self._folders: List[Path] = []
+        self._sort_order: str = DEFAULT_SORT_ORDER
         self._is_selection_mode: bool = False
         self._selected_folders: Set[Path] = set()
         self._folder_colors: Dict[str, str] = {}
         self._init_ui()
+
+    def set_sort_order(self, sort_order: str, current_selection: Optional[Path] = None) -> None:
+        """Update folder tree sort order and re-render all hierarchy levels."""
+        normalized = normalize_sort_order(sort_order)
+        if self._sort_order == normalized:
+            return
+        self._sort_order = normalized
+        self._update_folder_items(current_selection)
 
     def set_folder_colors(self, colors: Dict[str, str]) -> None:
         """Update cached folder colors and refresh UI."""
@@ -459,9 +469,16 @@ class FolderSidebar(QWidget):
         if color.isValid():
             self._apply_folder_color(folder_name, color.name())
 
-    def set_folders(self, folders: List[Path], current_selection: Optional[Path] = None) -> None:
+    def set_folders(
+        self,
+        folders: List[Path],
+        current_selection: Optional[Path] = None,
+        sort_order: Optional[str] = None,
+    ) -> None:
         """Populate the sidebar with 'All Notes' and custom folders tree."""
         self._folders = folders
+        if sort_order is not None:
+            self._sort_order = normalize_sort_order(sort_order)
         self._update_folder_items(current_selection)
 
     def _update_folder_items(self, current_selection: Optional[Path] = None) -> None:
@@ -481,8 +498,8 @@ class FolderSidebar(QWidget):
         # Map Path -> QTreeWidgetItem to parent subfolders cleanly
         item_map: Dict[Path, QTreeWidgetItem] = {}
 
-        # Sort folders so parent directories always appear before their children
-        sorted_folders = sorted(self._folders, key=lambda p: (len(p.parts), str(p)))
+        # Sort folders hierarchically across all nesting depths while keeping parents before children
+        sorted_folders = sort_folders(self._folders, sort_order=self._sort_order)
 
         for folder in sorted_folders:
             item = QTreeWidgetItem([folder.name])

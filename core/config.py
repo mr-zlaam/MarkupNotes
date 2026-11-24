@@ -8,6 +8,7 @@ import tempfile
 from typing import Any, Dict, Optional
 
 from utils.paths import get_config_dir
+from utils.sorting import DEFAULT_SORT_ORDER, VALID_SORT_ORDERS, normalize_sort_order
 
 
 @dataclass
@@ -31,6 +32,7 @@ class GeneralConfig:
     default_note_name: str = "Untitled Note"
     startup_action: str = "last_note"  # "last_note", "welcome", "empty"
     ui_scale: float = 1.0
+    default_sort_order: str = DEFAULT_SORT_ORDER  # "name_asc", "name_desc", "newest", "oldest"
 
 
 @dataclass
@@ -95,6 +97,7 @@ class AppSettings:
             default_note_name=str(gen_data.get("default_note_name", "Untitled Note")),
             startup_action=str(gen_data.get("startup_action", "last_note")),
             ui_scale=float(gen_data.get("ui_scale", 1.0)),
+            default_sort_order=normalize_sort_order(gen_data.get("default_sort_order")),
         )
 
         win_data = data.get("window", {})
@@ -328,6 +331,7 @@ class ConfigManager:
         default_note_name: Optional[str] = None,
         startup_action: Optional[str] = None,
         ui_scale: Optional[float] = None,
+        default_sort_order: Optional[str] = None,
     ) -> None:
         """Update and save general configuration."""
         if confirm_delete is not None:
@@ -338,6 +342,8 @@ class ConfigManager:
             self.settings.general.startup_action = startup_action
         if ui_scale is not None:
             self.settings.general.ui_scale = round(float(ui_scale), 2)
+        if default_sort_order is not None and default_sort_order in VALID_SORT_ORDERS:
+            self.settings.general.default_sort_order = default_sort_order
         self.save()
 
     def update_markdown(

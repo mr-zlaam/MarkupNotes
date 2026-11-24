@@ -61,6 +61,7 @@ from utils.icons import (
     create_type_icon,
 )
 from utils.paths import get_config_dir, get_default_notes_dir
+from utils.sorting import SORT_NAME_ASC, SORT_NAME_DESC, SORT_NEWEST, SORT_OLDEST, normalize_sort_order
 from ui.theme import TOOLTIP_QSS
 
 
@@ -635,6 +636,25 @@ class ModernSettingsDialog(QDialog):
         layout.addWidget(r_scale)
         self.setting_rows.append(r_scale)
 
+        # 4. Default Sort Order
+        sort_combo = ModernComboBox()
+        for label, _ in self.SORT_ORDER_OPTIONS:
+            sort_combo.addItem(label)
+        cur_sort = normalize_sort_order(getattr(cfg.general, "default_sort_order", SORT_NAME_ASC))
+        sort_idx = next(
+            (i for i, (_, val) in enumerate(self.SORT_ORDER_OPTIONS) if val == cur_sort),
+            0,
+        )
+        sort_combo.setCurrentIndex(sort_idx)
+        sort_combo.currentIndexChanged.connect(self._on_sort_order_changed)
+        r_sort = SettingRow(
+            "Default Sort Order",
+            "Order used for folders (including nested subfolders) and notes when opening the app",
+            sort_combo,
+        )
+        layout.addWidget(r_sort)
+        self.setting_rows.append(r_sort)
+
         # 4. Clear Folder and Note Color Overrides (moved from Appearance)
         clear_colors_btn = QPushButton("Reset Custom Colors")
         clear_colors_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -816,6 +836,13 @@ class ModernSettingsDialog(QDialog):
         layout.addStretch()
         return scroll
 
+    SORT_ORDER_OPTIONS = [
+        ("Name (A-Z) (Default)", SORT_NAME_ASC),
+        ("Name (Z-A)", SORT_NAME_DESC),
+        ("Newest First", SORT_NEWEST),
+        ("Oldest First", SORT_OLDEST),
+    ]
+
     AUTO_BACKUP_DELAY_OPTIONS = [
         ("1 second", 1000),
         ("2.5 seconds (Default)", 2500),
@@ -966,6 +993,13 @@ class ModernSettingsDialog(QDialog):
         scales = [0.75, 0.85, 0.9, 1.0, 1.1, 1.25, 1.4, 1.6, 1.8, 2.0]
         if 0 <= index < len(scales):
             self.config_manager.update_general(ui_scale=scales[index])
+            self.settings_updated.emit()
+
+    def _on_sort_order_changed(self, index: int) -> None:
+        """Persist default file and folder sort order and notify listeners."""
+        if 0 <= index < len(self.SORT_ORDER_OPTIONS):
+            _, sort_order = self.SORT_ORDER_OPTIONS[index]
+            self.config_manager.update_general(default_sort_order=sort_order)
             self.settings_updated.emit()
 
     def _on_clear_custom_colors(self) -> None:

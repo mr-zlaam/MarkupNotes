@@ -20,6 +20,7 @@ from ui.note_list import NoteListPanel
 from ui.sidebar import FolderSidebar
 from utils.file_validator import MAX_FOLDER_NAME_LENGTH, validate_folder_name, validate_markdown_file
 from utils.note_io import AsyncSaveQueue, note_matches_query
+from utils.sorting import normalize_sort_order, sort_notes
 
 ZOOM_STEPS: tuple[float, ...] = (0.75, 0.85, 0.9, 1.0, 1.1, 1.25, 1.4, 1.6, 1.8, 2.0)
 
@@ -55,6 +56,7 @@ class MainWindow(QMainWindow):
         # Load persisted settings from ~/.config/markup-notes/settings.json
         self.config_manager = config_manager if config_manager is not None else ConfigManager()
         self.config = self.config_manager.settings
+        self._applied_sort_order: str = normalize_sort_order(self.config.general.default_sort_order)
 
         self.resize(self.config.window.width, self.config.window.height)
         if self.config.window.maximized:
@@ -376,6 +378,10 @@ class MainWindow(QMainWindow):
             self._active_modal_overlay = None
             dlg.deleteLater()
 
+    def _get_sort_order(self) -> str:
+        """Return the normalized active sort order from configuration."""
+        return normalize_sort_order(self.config.general.default_sort_order)
+
     def _on_settings_updated(self) -> None:
         """Propagate settings changes live across UI components."""
         self.config = self.config_manager.settings
@@ -384,6 +390,13 @@ class MainWindow(QMainWindow):
         self.note_list.set_note_colors(self.config.appearance.note_colors)
         if hasattr(self, "backup_panel"):
             self.backup_panel.sync_auto_backup_settings()
+        new_sort_order = self._get_sort_order()
+        if new_sort_order != self._applied_sort_order:
+            self._applied_sort_order = new_sort_order
+            self.sidebar.set_sort_order(new_sort_order, current_selection=self._current_folder)
+            self._all_current_notes = sort_notes(self._all_current_notes, sort_order=new_sort_order)
+            current_note_path = str(self._current_note.path) if self._current_note else None
+            self._apply_note_list_view(preserve_path=current_note_path, emit_selection=False)
 
     def restore_default_layout(self) -> None:
         """Restore all panels, splitters, and geometries to initial factory state."""
@@ -528,13 +541,15 @@ class MainWindow(QMainWindow):
 
     def _load_initial_data(self) -> None:
         """Load folders and restore the user's last active folder, note, cursor, and scroll offset."""
+        sort_order = self._get_sort_order()
+        self._applied_sort_order = sort_order
         self.sidebar.set_folder_colors(self.config.appearance.folder_colors)
         self.note_list.set_note_colors(self.config.appearance.note_colors)
-        folders = self.storage.get_folders()
+        folders = self.storage.get_folders(sort_order=sort_order)
 
         # If an initial file or directory was requested (CLI or file manager), it takes priority
         if self._initial_path is not None:
-            self.sidebar.set_folders(folders)
+            self.sidebar.set_folders(folders, sort_order=sort_order)
             self._update_watcher_paths()
             self._refresh_notes()
             self.open_file_or_folder(self._initial_path)
@@ -558,7 +573,7 @@ class MainWindow(QMainWindow):
                     restored_scroll = max(0, sess.last_scroll_y)
 
         self._current_folder = restored_folder
-        self.sidebar.set_folders(folders, current_selection=restored_folder)
+        self.sidebar.set_folders(folders, current_selection=restored_folder, sort_order=sort_order)
         self._update_watcher_paths()
 
         if restored_note is not None:
@@ -588,9 +603,10 @@ class MainWindow(QMainWindow):
 
         # Case 1: Target is a directory -> open directory as notes root
         if path.is_dir():
+            sort_order = self._get_sort_order()
             self.storage.root_dir = path
-            folders = self.storage.get_folders()
-            self.sidebar.set_folders(folders)
+            folders = self.storage.get_folders(sort_order=sort_order)
+            self.sidebar.set_folders(folders, sort_order=sort_order)
             self._current_folder = None
             self._update_watcher_paths()
             self._refresh_notes()
@@ -692,9 +708,8 @@ class MainWindow(QMainWindow):
         """Reset internal saving guard flag."""
         self._is_saving_internally = False
 
-    def _refresh_notes(self, preserve_path: Optional[str] = None, emit_selection: bool = True) -> None:
-        """Reload notes for the current folder."""
-        self._all_current_notes = self.storage.list_notes(self._current_folder)
+    def _apply_note_list_view(self, preserve_path: Optional[str] = None, emit_selection: bool = True) -> None:
+        """Filter `_all_current_notes` against search bar and update the note list widget."""
         query = self.note_list.search_bar.text().strip().lower()
 
         if query:
@@ -721,12 +736,19 @@ class MainWindow(QMainWindow):
             self._current_note = None
             self.editor.load_note(None)
 
+    def _refresh_notes(self, preserve_path: Optional[str] = None, emit_selection: bool = True) -> None:
+        """Reload notes for the current folder using the active sort order."""
+        self._all_current_notes = self.storage.list_notes(
+            self._current_folder,
+            sort_order=self._get_sort_order(),
+        )
+        self._apply_note_list_view(preserve_path=preserve_path, emit_selection=emit_selection)
+
     def _upsert_current_note_in_list(self, old_path: Path, updated_note: Note) -> None:
         """Update or insert a note inside `_all_current_notes` without rescanning disk."""
         updated_list = [n for n in self._all_current_notes if n.path not in (old_path, updated_note.path)]
         updated_list.append(updated_note)
-        updated_list.sort(key=lambda n: n.modified_at, reverse=True)
-        self._all_current_notes = updated_list
+        self._all_current_notes = sort_notes(updated_list, sort_order=self._get_sort_order())
 
     def _on_folder_selected(self, folder: Optional[Path]) -> None:
         self.flush_pending_save()
@@ -774,8 +796,9 @@ class MainWindow(QMainWindow):
 
         new_folder = self.storage.create_folder(folder_name, parent_folder=parent_folder)
         if new_folder is not None:
-            folders = self.storage.get_folders()
-            self.sidebar.set_folders(folders, current_selection=new_folder)
+            sort_order = self._get_sort_order()
+            folders = self.storage.get_folders(sort_order=sort_order)
+            self.sidebar.set_folders(folders, current_selection=new_folder, sort_order=sort_order)
             self._current_folder = new_folder
             self._update_watcher_paths()
             self._refresh_notes()
@@ -956,7 +979,12 @@ class MainWindow(QMainWindow):
                 if self._current_folder == folder_path:
                     self._current_folder = renamed_folder
                 self._update_watcher_paths()
-                self.sidebar.set_folders(self.storage.get_folders(), current_selection=self._current_folder)
+                sort_order = self._get_sort_order()
+                self.sidebar.set_folders(
+                    self.storage.get_folders(sort_order=sort_order),
+                    current_selection=self._current_folder,
+                    sort_order=sort_order,
+                )
                 self._refresh_notes()
             else:
                 ModernMessageDialog.show_error(
@@ -990,7 +1018,12 @@ class MainWindow(QMainWindow):
             if self._current_folder == folder_path:
                 self._current_folder = None
             self._update_watcher_paths()
-            self.sidebar.set_folders(self.storage.get_folders(), current_selection=self._current_folder)
+            sort_order = self._get_sort_order()
+            self.sidebar.set_folders(
+                self.storage.get_folders(sort_order=sort_order),
+                current_selection=self._current_folder,
+                sort_order=sort_order,
+            )
             self._refresh_notes()
 
     def _on_delete_folders_batch(self, folders: List[Path]) -> None:
@@ -1017,7 +1050,12 @@ class MainWindow(QMainWindow):
                 self._current_folder = None
             self._update_watcher_paths()
             self.sidebar.exit_selection_mode()
-            self.sidebar.set_folders(self.storage.get_folders(), current_selection=self._current_folder)
+            sort_order = self._get_sort_order()
+            self.sidebar.set_folders(
+                self.storage.get_folders(sort_order=sort_order),
+                current_selection=self._current_folder,
+                sort_order=sort_order,
+            )
             self._refresh_notes()
 
     def _on_rename_note(self, note: Note) -> None:
@@ -1275,7 +1313,12 @@ class MainWindow(QMainWindow):
         """Refresh sidebar folders and note list when remote notes are imported or synchronized."""
         if success:
             self.editor.clear_inactive_note_cache()
-            self.sidebar.set_folders(self.storage.get_folders(), current_selection=self._current_folder)
+            sort_order = self._get_sort_order()
+            self.sidebar.set_folders(
+                self.storage.get_folders(sort_order=sort_order),
+                current_selection=self._current_folder,
+                sort_order=sort_order,
+            )
             self._update_watcher_paths()
             current_path = str(self._current_note.path) if self._current_note else None
             self._refresh_notes(preserve_path=current_path, emit_selection=False)
