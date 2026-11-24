@@ -382,11 +382,10 @@ class MarkdownHighlighter(QSyntaxHighlighter):
                     new_modes[b] = ("inactive_code", body_pt)
                 new_modes[cr.end_block] = ("inactive_code", fence_pt)
 
-        # 5. Date Cards (@date(...))
+        # 5. Date Cards (@date(...)) — keep card formatted even when caret is on this line
         date_pt = max(18, int(round(30 * scale)))
         for bn in self.date_blocks:
-            if bn != self.active_block_number:
-                new_modes[bn] = ("inactive_date", date_pt)
+            new_modes[bn] = ("inactive_date", date_pt)
 
         # 6. YouTube Video Cards (Standalone URLs & <iframe>)
         video_pt = max(10, int(round(14 * scale)))
@@ -647,7 +646,7 @@ class MarkdownHighlighter(QSyntaxHighlighter):
                 fmt = QTextCharFormat()
                 if base_point_size:
                     fmt.setFontPointSize(base_point_size)
-                fmt.setFontWeight(QFont.Weight.DemiBold)
+                fmt.setFontWeight(QFont.Weight.Bold if base_bold else QFont.Weight.Medium)
                 if is_checked:
                     fmt.setForeground(dim_color)
                 else:
@@ -837,7 +836,7 @@ class MarkdownHighlighter(QSyntaxHighlighter):
                         # Check if entire link is wrapped in bold (**[link](url)**)
                         for bm in BOLD_RE.finditer(text):
                             if bm.start() <= g1_start and g3_end <= bm.end():
-                                fmt.setFontWeight(QFont.Weight.DemiBold)
+                                fmt.setFontWeight(QFont.Weight.Bold if base_bold else QFont.Weight.Medium)
                                 break
                     self._format(text, g2_start, g2_end - g2_start, fmt)
 
@@ -848,7 +847,7 @@ class MarkdownHighlighter(QSyntaxHighlighter):
                             im_s = g2_start + im.start() + len(im.group(1))
                             im_len = (im.end() - im.start()) - 2 * len(im.group(1))
                             b_fmt = QTextCharFormat(fmt)
-                            b_fmt.setFontWeight(QFont.Weight.DemiBold)
+                            b_fmt.setFontWeight(QFont.Weight.Bold if base_bold else QFont.Weight.Medium)
                             if is_checked:
                                 b_fmt.setForeground(dim_color)
                             self._format(text, im_s, im_len, b_fmt)
@@ -892,7 +891,7 @@ class MarkdownHighlighter(QSyntaxHighlighter):
                     elif "*" in text or "_" in text:
                         for bm in BOLD_RE.finditer(text):
                             if bm.start() <= raw_start and raw_start + raw_len <= bm.end():
-                                fmt.setFontWeight(QFont.Weight.DemiBold)
+                                fmt.setFontWeight(QFont.Weight.Bold if base_bold else QFont.Weight.Medium)
                                 break
                     if "*" in text or "_" in text:
                         for im in ITALIC_RE.finditer(text):

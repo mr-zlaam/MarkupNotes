@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional, Tuple
 
-from PyQt6.QtCore import QPointF, QRectF, QSize, Qt, QUrl
+from PyQt6.QtCore import QPointF, QRectF, QSize, QThread, QTimer, Qt, QUrl, pyqtSignal
 from PyQt6.QtGui import (
     QColor,
     QDesktopServices,
@@ -12,6 +12,7 @@ from PyQt6.QtGui import (
     QPainter,
     QPainterPath,
     QPen,
+    QPixmap,
 )
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -88,6 +89,66 @@ class ModernCheckBox(QCheckBox):
         painter.end()
 
 
+class _GitHubConnectWorker(QThread):
+    """Background worker verifying token and creating private backup repository without blocking UI."""
+
+    progress = pyqtSignal(str)
+    completed = pyqtSignal(bool, object, str, str)  # ok, user, error_msg, repo_url
+
+    def __init__(
+        self,
+        github_client: GitHubClient,
+        token: str,
+        create_repo: bool,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._client = github_client
+        self._token = token
+        self._create_repo = create_repo
+
+    def run(self) -> None:
+        ok, user, msg = self._client.verify_token(self._token)
+        if not ok or user is None:
+            self.completed.emit(False, None, msg, "")
+            return
+
+        repo_url = ""
+        if self._create_repo:
+            self.progress.emit(f"Signed in as @{user.login}. Setting up private repository...")
+            ok_r, repo, _ = self._client.create_private_repo(
+                token=self._token,
+                repo_name="markup-notes",
+                description="My Markup Notes vault backup",
+            )
+            if ok_r and repo is not None:
+                repo_url = repo.clone_url
+
+        self.completed.emit(True, user, "", repo_url)
+
+
+def _render_button_spinner_icon(angle_deg: int, size: int = 14) -> QIcon:
+    """Render an anti-aliased rotating loader arc icon for primary action buttons."""
+    pix = QPixmap(size, size)
+    pix.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pix)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+    rect = QRectF(2.0, 2.0, float(size - 4), float(size - 4))
+    track_pen = QPen(QColor(255, 255, 255, 70), 2.0)
+    track_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setPen(track_pen)
+    painter.drawEllipse(rect)
+
+    arc_pen = QPen(QColor("#ffffff"), 2.0)
+    arc_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setPen(arc_pen)
+    painter.drawArc(rect, -angle_deg * 16, -240 * 16)
+
+    painter.end()
+    return QIcon(pix)
+
+
 class ModernGitHubAuthDialog(QDialog):
     """Sleek dark-themed modal dialog for authenticating with GitHub."""
 
@@ -101,6 +162,12 @@ class ModernGitHubAuthDialog(QDialog):
         self.authenticated_token: Optional[str] = None
         self.authenticated_user: Optional[GitHubUser] = None
         self.created_repo_url: Optional[str] = None
+        self._connect_worker: Optional[_GitHubConnectWorker] = None
+        self._cancelled: bool = False
+        self._spinner_angle: int = 0
+        self._spinner_timer = QTimer(self)
+        self._spinner_timer.setInterval(60)
+        self._spinner_timer.timeout.connect(self._advance_spinner)
 
         self.setStyleSheet("""
             QDialog {
@@ -340,8 +407,35 @@ class ModernGitHubAuthDialog(QDialog):
     def _on_token_changed(self) -> None:
         self.status_lbl.setText("")
 
+    def _advance_spinner(self) -> None:
+        """Rotate the Connect button spinner icon smoothly while connecting."""
+        self._spinner_angle = (self._spinner_angle + 24) % 360
+        self.btn_connect.setIcon(_render_button_spinner_icon(self._spinner_angle))
+
+    def _set_connecting_state(self, connecting: bool) -> None:
+        """Toggle Connect button animated loader and input lock state."""
+        if connecting:
+            self._spinner_angle = 0
+            self.btn_connect.setEnabled(False)
+            self.btn_connect.setIconSize(QSize(14, 14))
+            self.btn_connect.setIcon(_render_button_spinner_icon(0))
+            self.btn_connect.setText(" Connecting...")
+            self.token_input.setEnabled(False)
+            self.chk_create_repo.setEnabled(False)
+            self._spinner_timer.start()
+        else:
+            self._spinner_timer.stop()
+            self.btn_connect.setIcon(QIcon())
+            self.btn_connect.setText("Connect")
+            self.btn_connect.setEnabled(True)
+            self.token_input.setEnabled(True)
+            self.chk_create_repo.setEnabled(True)
+
     def _do_verify_and_connect(self) -> None:
-        """Verify token with GitHub, optionally create private repository, and save."""
+        """Verify token with GitHub in background thread with animated button loader."""
+        if self._connect_worker is not None and self._connect_worker.isRunning():
+            return
+
         token = self.token_input.text().strip()
         if not token:
             self.status_lbl.setStyleSheet("color: #ff453a;")
@@ -349,16 +443,46 @@ class ModernGitHubAuthDialog(QDialog):
             self.adjustSize()
             return
 
-        self.btn_connect.setEnabled(False)
-        self.btn_connect.setText("Verifying...")
+        self._cancelled = False
+        self._set_connecting_state(True)
         self.status_lbl.setStyleSheet("color: #9c9ca4;")
         self.status_lbl.setText("Connecting to GitHub API...")
         self.adjustSize()
 
-        ok, user, msg = self.github_client.verify_token(token)
+        worker = _GitHubConnectWorker(
+            github_client=self.github_client,
+            token=token,
+            create_repo=self.chk_create_repo.isChecked(),
+            parent=self,
+        )
+        worker.progress.connect(self._on_connect_progress)
+        worker.completed.connect(lambda ok, user, msg, url: self._on_connect_finished(token, ok, user, msg, url))
+        worker.finished.connect(worker.deleteLater)
+        self._connect_worker = worker
+        worker.start()
+
+    def _on_connect_progress(self, status_text: str) -> None:
+        """Update status text emitted during repository setup."""
+        if not self._cancelled:
+            self.status_lbl.setText(status_text)
+
+    def _on_connect_finished(
+        self,
+        token: str,
+        ok: bool,
+        user: Optional[GitHubUser],
+        msg: str,
+        repo_url: str,
+    ) -> None:
+        """Handle completion of background GitHub verification and repo setup."""
+        if self._connect_worker is not None:
+            self._connect_worker.wait()
+            self._connect_worker = None
+        self._set_connecting_state(False)
+        if self._cancelled:
+            return
+
         if not ok or user is None:
-            self.btn_connect.setEnabled(True)
-            self.btn_connect.setText("Connect")
             self.status_lbl.setStyleSheet("color: #ff453a;")
             if "expired" in msg.lower() or "invalid" in msg.lower() or "401" in msg.lower():
                 self.status_lbl.setText("GitHub token is invalid or expired. Please generate a new token above.")
@@ -369,25 +493,22 @@ class ModernGitHubAuthDialog(QDialog):
 
         self.authenticated_token = token
         self.authenticated_user = user
-        repo_url = ""
-
-        # Create private repo if requested
-        if self.chk_create_repo.isChecked():
-            self.status_lbl.setText(f"Signed in as @{user.login}. Setting up private repository...")
-            ok_r, repo, r_msg = self.github_client.create_private_repo(
-                token=token,
-                repo_name="markup-notes",
-                description="My Markup Notes vault backup",
-            )
-            if ok_r and repo is not None:
-                repo_url = repo.clone_url
-                self.created_repo_url = repo_url
+        if repo_url:
+            self.created_repo_url = repo_url
 
         self.github_client.save_token(token=token, login=user.login, repo_url=repo_url)
-
         self.status_lbl.setStyleSheet("color: #30d158;")
         self.status_lbl.setText(f"Successfully connected as @{user.login}!")
         self.accept()
+
+    def reject(self) -> None:
+        """Stop spinner and wait cleanly for worker when user closes dialog."""
+        self._cancelled = True
+        self._spinner_timer.stop()
+        if self._connect_worker is not None and self._connect_worker.isRunning():
+            self._connect_worker.wait(2000)
+        self._connect_worker = None
+        super().reject()
 
     @classmethod
     def execute(cls, parent: Optional[QWidget] = None) -> Tuple[bool, Optional[str], Optional[str]]:

@@ -88,10 +88,36 @@ class TestDateCardRendering(unittest.TestCase):
         rect = QRectF(10.0, 5.0, 280.0, 36.0)
         target = date(2026, 11, 29)
 
-        # Should render without throwing exceptions
+        # Should render without throwing exceptions (including caret focus state)
         render_date_card(painter, rect, target, ui_scale=1.0, is_hovered=False)
-        render_date_card(painter, rect, target, ui_scale=1.25, is_hovered=True)
+        render_date_card(painter, rect, target, ui_scale=1.25, is_hovered=True, has_focus=True)
         painter.end()
+
+    def test_caret_over_date_block_keeps_card_formatted(self) -> None:
+        """Verify moving caret onto a @date(...) block keeps card mode and avoids disformatting."""
+        ed = MarkdownEditor()
+        try:
+            ed.setPlainText("Intro line\n@date(2026-11-29)\nNext line")
+            ed.resize(500, 300)
+
+            # Place cursor directly onto the @date(...) line
+            block = ed.document().findBlockByNumber(1)
+            cur = QTextCursor(block)
+            cur.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+            ed.setTextCursor(cur)
+            QApplication.processEvents()
+
+            self.assertEqual(ed.highlighter.active_block_number, 1)
+            self.assertIn(1, ed.highlighter.date_blocks)
+            mode_info = ed.highlighter._block_modes.get(1)
+            self.assertIsNotNone(mode_info)
+            self.assertEqual(mode_info[0], "inactive_date")
+
+            # Repaint viewport and verify date card rect is still populated while caret is on block 1
+            ed.grab()
+            self.assertIn(1, ed._date_card_rects)
+        finally:
+            ed.deleteLater()
 
 
 class TestEditorDateIntegration(unittest.TestCase):

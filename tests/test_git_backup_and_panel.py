@@ -337,6 +337,49 @@ class TestGitBackupAndPanel(unittest.TestCase):
 
         dlg.deleteLater()
 
+    def test_github_auth_dialog_async_button_loader(self) -> None:
+        """Verify Connect button shows animated spinner while verifying and resets cleanly."""
+        import threading
+        from unittest.mock import patch
+        from PyQt6.QtTest import QTest
+        from core.github_client import GitHubUser
+        from ui.github_auth_dialog import ModernGitHubAuthDialog
+
+        dlg = ModernGitHubAuthDialog()
+        dlg.token_input.setText("ghp_test_token_123")
+        dlg.chk_create_repo.setChecked(False)
+
+        gate = threading.Event()
+
+        def slow_verify(token: str):
+            gate.wait(timeout=2.0)
+            return (True, GitHubUser(login="tester", name="Tester", avatar_url=""), "OK")
+
+        with (
+            patch.object(dlg.github_client, "verify_token", side_effect=slow_verify),
+            patch.object(dlg.github_client, "save_token"),
+        ):
+            dlg._do_verify_and_connect()
+            self.assertFalse(dlg.btn_connect.isEnabled())
+            self.assertTrue(dlg._spinner_timer.isActive())
+            self.assertFalse(dlg.btn_connect.icon().isNull())
+            self.assertIn("Connecting", dlg.btn_connect.text())
+
+            gate.set()
+            for _ in range(40):
+                QApplication.processEvents()
+                if not dlg._spinner_timer.isActive() and dlg._connect_worker is None:
+                    break
+                QTest.qWait(15)
+
+            self.assertFalse(dlg._spinner_timer.isActive())
+            self.assertIsNotNone(dlg.authenticated_user)
+            self.assertEqual(dlg.authenticated_user.login, "tester")
+
+        dlg.close()
+        dlg.deleteLater()
+        QApplication.processEvents()
+
     def test_github_token_url_and_expired_auth_detection(self) -> None:
         """Verify pre-scoped classic token URL and expired token detection."""
         client = GitHubClient()

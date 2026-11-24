@@ -2022,13 +2022,11 @@ class MarkdownEditor(QTextEdit):
                 painter.drawRoundedRect(card_rect, corner_r, corner_r)
                 painter.restore()
 
-        # 4.5. Render Inactive Date Cards (@date(...))
+        # 4.5. Render Date Cards (@date(...)) — keep card intact even when caret is on this line
         self._date_card_rects.clear()
         scale = getattr(self, "ui_scale", 1.0)
         card_h = round(52.0 * scale)
         for b_num, target_date in self.highlighter.date_blocks.items():
-            if b_num == active_bn:
-                continue
             b = self.document().findBlockByNumber(b_num)
             if not b.isValid():
                 continue
@@ -2049,6 +2047,7 @@ class MarkdownEditor(QTextEdit):
                 target_date,
                 ui_scale=scale,
                 is_hovered=is_hovered,
+                has_focus=(b_num == active_bn),
             )
 
             if has_sel and (sel_start_b <= b_num <= sel_end_b):

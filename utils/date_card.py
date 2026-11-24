@@ -17,6 +17,7 @@ def render_date_card(
     target_date: date,
     ui_scale: float = 1.0,
     is_hovered: bool = False,
+    has_focus: bool = False,
 ) -> None:
     """Render a rounded date card container matching the user reference design."""
     painter.save()
@@ -25,7 +26,7 @@ def render_date_card(
 
     # 1. Card container background & border
     corner_r = round(10.0 * ui_scale, 1)
-    border_col = QColor("#0a84ff") if is_hovered else QColor("#444452")
+    border_col = QColor("#0a84ff") if (is_hovered or has_focus) else QColor("#444452")
     bg_col = QColor("#30303c") if is_hovered else QColor("#282832")
 
     painter.setPen(QPen(border_col, 1.0))
