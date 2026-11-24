@@ -5,7 +5,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from utils.paths import get_config_dir
 from utils.sorting import DEFAULT_SORT_ORDER, VALID_SORT_ORDERS, normalize_sort_order
@@ -75,6 +75,7 @@ class SessionConfig:
     last_note: str = ""
     last_cursor_pos: int = 0
     last_scroll_y: int = 0
+    collapsed_folders: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -153,11 +154,18 @@ class AppSettings:
         )
 
         sess_data = data.get("session", {})
+        raw_collapsed = sess_data.get("collapsed_folders", [])
+        collapsed_folders = (
+            [str(p) for p in raw_collapsed if isinstance(p, str) and p]
+            if isinstance(raw_collapsed, list)
+            else []
+        )
         session = SessionConfig(
             last_folder=str(sess_data.get("last_folder", "")),
             last_note=str(sess_data.get("last_note", "")),
             last_cursor_pos=max(0, int(sess_data.get("last_cursor_pos", 0))),
             last_scroll_y=max(0, int(sess_data.get("last_scroll_y", 0))),
+            collapsed_folders=collapsed_folders,
         )
 
         return cls(
@@ -377,9 +385,10 @@ class ConfigManager:
         last_note: Optional[str] = None,
         last_cursor_pos: Optional[int] = None,
         last_scroll_y: Optional[int] = None,
+        collapsed_folders: Optional[List[str]] = None,
         save: bool = True,
     ) -> None:
-        """Update and optionally persist last active folder, note, cursor, and scroll state."""
+        """Update and optionally persist last active folder, note, cursor, scroll, and tree state."""
         if last_folder is not None:
             self.settings.session.last_folder = last_folder
         if last_note is not None:
@@ -388,6 +397,8 @@ class ConfigManager:
             self.settings.session.last_cursor_pos = max(0, int(last_cursor_pos))
         if last_scroll_y is not None:
             self.settings.session.last_scroll_y = max(0, int(last_scroll_y))
+        if collapsed_folders is not None:
+            self.settings.session.collapsed_folders = list(collapsed_folders)
         if save:
             self.save()
 

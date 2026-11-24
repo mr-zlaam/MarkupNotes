@@ -30,6 +30,7 @@ from utils.icons import (
     create_check_icon,
     create_checkbox_icon,
     create_close_icon,
+    create_collapse_all_icon,
     create_color_circle_icon,
     create_edit_icon,
     create_folder_icon,
@@ -56,11 +57,14 @@ class FolderSidebar(QWidget):
     delete_folders_batch_requested = pyqtSignal(list)  # Emits List[Path]
     select_all_notes_requested = pyqtSignal()
     folder_color_changed = pyqtSignal(str, object)  # Emits (folder_name, hex_color_or_None)
+    folder_expansion_changed = pyqtSignal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent=parent)
         self.ui_scale: float = 1.0
         self._folders: List[Path] = []
+        self._root_dir: Optional[Path] = None
+        self._collapsed_keys: Set[str] = set()
         self._sort_order: str = DEFAULT_SORT_ORDER
         self._is_selection_mode: bool = False
         self._selected_folders: Set[Path] = set()
@@ -129,6 +133,16 @@ class FolderSidebar(QWidget):
         self.add_folder_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.add_folder_btn.clicked.connect(lambda: self._on_add_folder_clicked(force_root=False))
         header_layout.addWidget(self.add_folder_btn)
+
+        # Single toggle button to collapse or expand all folders (VS Code Explorer style)
+        self.collapse_all_btn = QPushButton(parent=normal_header_widget)
+        self.collapse_all_btn.setObjectName("IconButton")
+        self.collapse_all_btn.setIcon(create_collapse_all_icon(collapsed=False, color="#8e8e93", size=15))
+        self.collapse_all_btn.setToolTip("Collapse All Folders (Ctrl+Left)")
+        self.collapse_all_btn.setFixedSize(26, 26)
+        self.collapse_all_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.collapse_all_btn.clicked.connect(self.toggle_collapse_all_folders)
+        header_layout.addWidget(self.collapse_all_btn)
 
         # Domain-owned collapse button for Folders
         self.collapse_btn = QPushButton(parent=normal_header_widget)
@@ -497,6 +511,89 @@ class FolderSidebar(QWidget):
             self._sort_order = normalize_sort_order(sort_order)
         self._update_folder_items(current_selection)
 
+    def set_root_dir(self, root_dir: Optional[Path]) -> None:
+        """Set workspace root directory used to normalize collapsed folder keys."""
+        self._root_dir = root_dir
+
+    def _folder_key(self, folder: Path) -> str:
+        """Return stable relative POSIX key for a folder path (or str fallback)."""
+        if self._root_dir is not None:
+            try:
+                return folder.relative_to(self._root_dir).as_posix()
+            except ValueError:
+                pass
+        return str(folder)
+
+    def set_collapsed_folders(self, collapsed_paths: List[str]) -> None:
+        """Restore persisted collapsed folder relative paths without triggering save."""
+        self._collapsed_keys = {str(p) for p in collapsed_paths if p}
+
+    def get_collapsed_folders(self) -> List[str]:
+        """Return sorted list of currently collapsed folder keys."""
+        return sorted(self._collapsed_keys)
+
+    def expand_folder(self, folder: Path) -> None:
+        """Ensure a specific folder is marked expanded (e.g. after creating a subfolder inside it)."""
+        self._collapsed_keys.discard(self._folder_key(folder))
+
+    def _iter_expandable_items(self) -> List[QTreeWidgetItem]:
+        """Collect all tree items that have at least one child folder."""
+        expandable: List[QTreeWidgetItem] = []
+
+        def _walk(item: QTreeWidgetItem) -> None:
+            if item.childCount() > 0:
+                expandable.append(item)
+                for c in range(item.childCount()):
+                    _walk(item.child(c))
+
+        for i in range(self.tree_widget.topLevelItemCount()):
+            _walk(self.tree_widget.topLevelItem(i))
+        return expandable
+
+    def are_all_folders_collapsed(self) -> bool:
+        """Return True when expandable folders exist and all of them are collapsed."""
+        expandable = self._iter_expandable_items()
+        return bool(expandable) and all(not item.isExpanded() for item in expandable)
+
+    def _update_collapse_all_button_state(self) -> None:
+        """Sync the Collapse/Expand All button icon and tooltip with current tree state."""
+        if not hasattr(self, "collapse_all_btn"):
+            return
+        all_collapsed = self.are_all_folders_collapsed()
+        self.collapse_all_btn.setIcon(
+            create_collapse_all_icon(collapsed=all_collapsed, color="#8e8e93", size=15)
+        )
+        self.collapse_all_btn.setToolTip(
+            "Expand All Folders (Ctrl+Left)" if all_collapsed else "Collapse All Folders (Ctrl+Left)"
+        )
+
+    def toggle_collapse_all_folders(self) -> None:
+        """Collapse all expandable folders if any are open; otherwise expand all folders."""
+        expandable = self._iter_expandable_items()
+        if not expandable:
+            return
+
+        expand = self.are_all_folders_collapsed()
+        self.tree_widget.blockSignals(True)
+        for item in expandable:
+            item.setExpanded(expand)
+            folder = item.data(0, Qt.ItemDataRole.UserRole)
+            if folder is not None:
+                key = self._folder_key(folder)
+                if expand:
+                    self._collapsed_keys.discard(key)
+                else:
+                    self._collapsed_keys.add(key)
+        self.tree_widget.blockSignals(False)
+
+        if not self._is_selection_mode:
+            current_item = self.tree_widget.currentItem()
+            for i in range(self.tree_widget.topLevelItemCount()):
+                self._refresh_folder_icon_state(self.tree_widget.topLevelItem(i), current_item)
+
+        self._update_collapse_all_button_state()
+        self.folder_expansion_changed.emit()
+
     def _update_folder_items(self, current_selection: Optional[Path] = None) -> None:
         """Render folder items in hierarchical tree with expansion and selection icons."""
         self.tree_widget.blockSignals(True)
@@ -534,12 +631,6 @@ class FolderSidebar(QWidget):
             parent_path = folder.parent
             if parent_path in item_map:
                 item_map[parent_path].addChild(item)
-                item_map[parent_path].setExpanded(True)
-                # Keep parent icon open since it is expanded
-                parent_folder = item_map[parent_path].data(0, Qt.ItemDataRole.UserRole)
-                if parent_folder is not None and not self._is_selection_mode:
-                    p_col = self._folder_colors.get(parent_folder.name) or "#e5a93c"
-                    item_map[parent_path].setIcon(0, create_folder_icon(color=p_col, size=16, is_open=True))
             else:
                 self.tree_widget.addTopLevelItem(item)
 
@@ -551,6 +642,12 @@ class FolderSidebar(QWidget):
         if not self._is_selection_mode:
             self.tree_widget.setCurrentItem(selected_item)
 
+        # Apply saved expansion/collapse state AFTER setCurrentItem so Qt does not auto-reopen collapsed parents
+        for folder, item in item_map.items():
+            if item.childCount() > 0:
+                is_expanded = self._folder_key(folder) not in self._collapsed_keys
+                item.setExpanded(is_expanded)
+
         self.tree_widget.blockSignals(False)
 
         if not self._is_selection_mode:
@@ -558,19 +655,29 @@ class FolderSidebar(QWidget):
             for i in range(self.tree_widget.topLevelItemCount()):
                 self._refresh_folder_icon_state(self.tree_widget.topLevelItem(i), current_item)
 
+        self._update_collapse_all_button_state()
+
     def _on_item_expanded(self, item: QTreeWidgetItem) -> None:
-        """Update folder icon to open state when expanded."""
+        """Update folder icon and persisted state when expanded."""
         folder = item.data(0, Qt.ItemDataRole.UserRole)
-        if folder is not None and not self._is_selection_mode:
-            folder_color = self._folder_colors.get(folder.name) or "#e5a93c"
-            item.setIcon(0, create_folder_icon(color=folder_color, size=16, is_open=True))
+        if folder is not None:
+            self._collapsed_keys.discard(self._folder_key(folder))
+            if not self._is_selection_mode:
+                folder_color = self._folder_colors.get(folder.name) or "#e5a93c"
+                item.setIcon(0, create_folder_icon(color=folder_color, size=16, is_open=True))
+        self._update_collapse_all_button_state()
+        self.folder_expansion_changed.emit()
 
     def _on_item_collapsed(self, item: QTreeWidgetItem) -> None:
-        """Update folder icon to closed state when collapsed."""
+        """Update folder icon and persisted state when collapsed."""
         folder = item.data(0, Qt.ItemDataRole.UserRole)
-        if folder is not None and not self._is_selection_mode:
-            folder_color = self._folder_colors.get(folder.name) or "#e5a93c"
-            item.setIcon(0, create_folder_icon(color=folder_color, size=16, is_open=False))
+        if folder is not None:
+            self._collapsed_keys.add(self._folder_key(folder))
+            if not self._is_selection_mode:
+                folder_color = self._folder_colors.get(folder.name) or "#e5a93c"
+                item.setIcon(0, create_folder_icon(color=folder_color, size=16, is_open=False))
+        self._update_collapse_all_button_state()
+        self.folder_expansion_changed.emit()
 
     def _on_selection_changed(self) -> None:
         if self._is_selection_mode:

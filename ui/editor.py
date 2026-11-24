@@ -196,6 +196,7 @@ class MarkdownEditor(QTextEdit):
     zoom_reset_requested = pyqtSignal()
     zoom_changed = pyqtSignal(int)
     word_wrap_toggled = pyqtSignal(bool)
+    collapse_all_folders_requested = pyqtSignal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent=parent)
@@ -3228,6 +3229,10 @@ class MarkdownEditor(QTextEdit):
                 return
 
             if not has_shift:
+                if event.key() == Qt.Key.Key_Left:
+                    self.collapse_all_folders_requested.emit()
+                    event.accept()
+                    return
                 if event.key() == Qt.Key.Key_F:
                     self.find_requested.emit(False)
                     event.accept()
@@ -3758,6 +3763,7 @@ class EditorPanel(QWidget):
     zoom_reset_requested = pyqtSignal()
     zoom_changed = pyqtSignal(int)
     word_wrap_toggled = pyqtSignal(bool)
+    collapse_all_folders_requested = pyqtSignal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent=parent)
@@ -3895,6 +3901,7 @@ class EditorPanel(QWidget):
         self.editor.zoom_out_requested.connect(self.zoom_out_requested.emit)
         self.editor.zoom_reset_requested.connect(self.zoom_reset_requested.emit)
         self.editor.word_wrap_toggled.connect(self.word_wrap_toggled.emit)
+        self.editor.collapse_all_folders_requested.connect(self.collapse_all_folders_requested.emit)
 
         # In-note Find & Replace Bar
         self.find_replace_bar = FindReplaceBar(parent=self)

@@ -345,6 +345,17 @@ def create_sync_icon(color: str = "#ffffff", size: int = 16, stroke_width: float
     return render_lucide_icon("refresh-cw", color=color, size=size, stroke_width=stroke_width)
 
 
+def create_collapse_all_icon(
+    collapsed: bool = False,
+    color: str = "#8e8e93",
+    size: int = 15,
+    stroke_width: float = 1.5,
+) -> QIcon:
+    """Generate a VS Code-style stacked collapse-all (-) or expand-all (+) vector icon."""
+    name = "copy-plus" if collapsed else "copy-minus"
+    return render_lucide_icon(name, color=color, size=size, stroke_width=stroke_width)
+
+
 def create_history_icon(color: str = "#8e8e93", size: int = 14, stroke_width: float = 1.35) -> QIcon:
     """Generate a clean vector history / clock-rewind icon."""
     return render_lucide_icon("history", color=color, size=size, stroke_width=stroke_width)

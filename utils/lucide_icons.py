@@ -52,6 +52,8 @@ LUCIDE_SVGS: Dict[str, str] = {
     "type": '<polyline points="4 7 4 4 20 4 20 7"/><line x1="9" x2="15" y1="20" y2="20"/><line x1="12" x2="12" y1="4" y2="20"/>',
     "palette": '<circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/>',
     "code": '<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>',
+    "copy-minus": '<line x1="11" x2="17" y1="10" y2="10"/><rect width="14" height="14" x="7" y="3" rx="2"/><path d="M3 8v11a2 2 0 0 0 2 2h11"/>',
+    "copy-plus": '<line x1="11" x2="17" y1="10" y2="10"/><line x1="14" x2="14" y1="7" y2="13"/><rect width="14" height="14" x="7" y="3" rx="2"/><path d="M3 8v11a2 2 0 0 0 2 2h11"/>',
 }
 
 _ICON_CACHE: Dict[Tuple[str, str, int, float, Optional[str], Optional[float]], QIcon] = {}

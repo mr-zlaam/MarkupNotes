@@ -7,6 +7,7 @@ from pathlib import Path
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QTextCursor
+from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -157,6 +158,87 @@ class TestSessionRestore(unittest.TestCase):
         finally:
             win3.close()
             win3.deleteLater()
+
+    def test_collapse_expand_all_folders_button_ctrl_left_and_persistence(self) -> None:
+        """Verify collapse/expand all button, Ctrl+Left shortcut, and folder state persistence across launches."""
+        deep_dir = self.notes_dir / "Work" / "Projects" / "Sprint1"
+        deep_dir.mkdir(parents=True, exist_ok=True)
+        personal_sub = self.notes_dir / "Personal" / "Journal"
+        personal_sub.mkdir(parents=True, exist_ok=True)
+
+        # 1. First launch: folders start expanded and Collapse All button shows Collapse state
+        win1 = self._new_window()
+        win1.show()
+        self.app.processEvents()
+        self.assertFalse(win1.sidebar.are_all_folders_collapsed())
+        self.assertEqual(win1.sidebar.collapse_all_btn.toolTip(), "Collapse All Folders (Ctrl+Left)")
+
+        # Click Collapse All button -> collapses every expandable folder
+        win1.sidebar.collapse_all_btn.click()
+        self.app.processEvents()
+        self.assertTrue(win1.sidebar.are_all_folders_collapsed())
+        self.assertEqual(win1.sidebar.collapse_all_btn.toolTip(), "Expand All Folders (Ctrl+Left)")
+        win1.close()
+        win1.deleteLater()
+        self.app.processEvents()
+
+        # 2. Relaunch: collapsed state must be preserved
+        win2 = self._new_window()
+        win2.show()
+        self.app.processEvents()
+        try:
+            self.assertTrue(win2.sidebar.are_all_folders_collapsed())
+            self.assertEqual(win2.sidebar.collapse_all_btn.toolTip(), "Expand All Folders (Ctrl+Left)")
+
+            # Ctrl+Left from sidebar expands all
+            QTest.keyClick(win2.sidebar.tree_widget, Qt.Key.Key_Left, Qt.KeyboardModifier.ControlModifier)
+            self.app.processEvents()
+            self.assertFalse(win2.sidebar.are_all_folders_collapsed())
+
+            # Ctrl+Left from editor also toggles back to collapsed, then expanded again
+            QTest.keyClick(win2.editor.editor, Qt.Key.Key_Left, Qt.KeyboardModifier.ControlModifier)
+            self.app.processEvents()
+            self.assertTrue(win2.sidebar.are_all_folders_collapsed())
+
+            QTest.keyClick(win2.editor.editor, Qt.Key.Key_Left, Qt.KeyboardModifier.ControlModifier)
+            self.app.processEvents()
+            self.assertFalse(win2.sidebar.are_all_folders_collapsed())
+        finally:
+            win2.close()
+            win2.deleteLater()
+            self.app.processEvents()
+
+        # 3. Relaunch after leaving expanded -> folders remain expanded
+        win3 = self._new_window()
+        try:
+            self.assertFalse(win3.sidebar.are_all_folders_collapsed())
+
+            # Collapse only 'Personal', keep 'Work' expanded
+            personal_item = next(
+                win3.sidebar.tree_widget.topLevelItem(i)
+                for i in range(win3.sidebar.tree_widget.topLevelItemCount())
+                if win3.sidebar.tree_widget.topLevelItem(i).text(0) == "Personal"
+            )
+            personal_item.setExpanded(False)
+            self.app.processEvents()
+        finally:
+            win3.close()
+            win3.deleteLater()
+            self.app.processEvents()
+
+        # 4. Relaunch verifies mixed per-folder expansion state is preserved
+        win4 = self._new_window()
+        try:
+            items_by_name = {
+                win4.sidebar.tree_widget.topLevelItem(i).text(0): win4.sidebar.tree_widget.topLevelItem(i)
+                for i in range(win4.sidebar.tree_widget.topLevelItemCount())
+            }
+            self.assertFalse(items_by_name["Personal"].isExpanded())
+            self.assertTrue(items_by_name["Work"].isExpanded())
+        finally:
+            win4.close()
+            win4.deleteLater()
+            self.app.processEvents()
 
 
 if __name__ == "__main__":

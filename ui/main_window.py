@@ -104,6 +104,7 @@ class MainWindow(QMainWindow):
         self.sidebar.delete_folders_batch_requested.connect(self._on_delete_folders_batch)
         self.sidebar.select_all_notes_requested.connect(self._on_select_all_notes_requested)
         self.sidebar.folder_color_changed.connect(self._on_folder_color_changed)
+        self.sidebar.folder_expansion_changed.connect(self._schedule_session_save)
 
         # 2. Middle: Note Cards List
         self.note_list = NoteListPanel(parent=self.splitter)
@@ -132,6 +133,7 @@ class MainWindow(QMainWindow):
         self.editor.zoom_out_requested.connect(self._on_zoom_out)
         self.editor.zoom_reset_requested.connect(self._on_zoom_reset)
         self.editor.word_wrap_toggled.connect(self._on_editor_word_wrap_toggled)
+        self.editor.collapse_all_folders_requested.connect(self.sidebar.toggle_collapse_all_folders)
 
         # 4. Far Right: Backup & Version History Panel
         self.backup_panel = BackupPanel(
@@ -186,6 +188,12 @@ class MainWindow(QMainWindow):
         # Toggle Folders Sidebar (Ctrl+\)
         toggle_sidebar_sc = QShortcut(QKeySequence("Ctrl+\\"), self)
         toggle_sidebar_sc.activated.connect(self._toggle_sidebar)
+
+        # Collapse / Expand All Folders (Ctrl+Left)
+        collapse_all_sc = QShortcut(QKeySequence("Ctrl+Left"), self)
+        collapse_all_sc.setContext(Qt.ShortcutContext.WindowShortcut)
+        collapse_all_sc.activated.connect(self.sidebar.toggle_collapse_all_folders)
+        self._registered_shortcuts.append(collapse_all_sc)
 
         # Toggle Notes List (Ctrl+Shift+\)
         toggle_notes_sc = QShortcut(QKeySequence("Ctrl+Shift+\\"), self)
@@ -527,6 +535,7 @@ class MainWindow(QMainWindow):
             last_note=note_str,
             last_cursor_pos=cursor_pos,
             last_scroll_y=scroll_y,
+            collapsed_folders=self.sidebar.get_collapsed_folders(),
             save=persist,
         )
 
@@ -543,6 +552,8 @@ class MainWindow(QMainWindow):
         """Load folders and restore the user's last active folder, note, cursor, and scroll offset."""
         sort_order = self._get_sort_order()
         self._applied_sort_order = sort_order
+        self.sidebar.set_root_dir(self.storage.root_dir)
+        self.sidebar.set_collapsed_folders(self.config.session.collapsed_folders)
         self.sidebar.set_folder_colors(self.config.appearance.folder_colors)
         self.note_list.set_note_colors(self.config.appearance.note_colors)
         folders = self.storage.get_folders(sort_order=sort_order)
@@ -605,6 +616,7 @@ class MainWindow(QMainWindow):
         if path.is_dir():
             sort_order = self._get_sort_order()
             self.storage.root_dir = path
+            self.sidebar.set_root_dir(path)
             folders = self.storage.get_folders(sort_order=sort_order)
             self.sidebar.set_folders(folders, sort_order=sort_order)
             self._current_folder = None
@@ -800,6 +812,8 @@ class MainWindow(QMainWindow):
 
         new_folder = self.storage.create_folder(folder_name, parent_folder=parent_folder)
         if new_folder is not None:
+            if parent_folder is not None:
+                self.sidebar.expand_folder(parent_folder)
             sort_order = self._get_sort_order()
             folders = self.storage.get_folders(sort_order=sort_order)
             self.sidebar.set_folders(folders, current_selection=new_folder, sort_order=sort_order)
