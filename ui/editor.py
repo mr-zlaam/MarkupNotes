@@ -1506,9 +1506,17 @@ class MarkdownEditor(QTextEdit):
             self.highlighter.active_block_number = cur.block().blockNumber()
             self.highlighter.cursor_pos_in_block = cur.positionInBlock()
             self.verticalScrollBar().setValue(max(0, scroll_y))
+            self.reset_horizontal_scroll()
+            QTimer.singleShot(0, self.reset_horizontal_scroll)
             self.viewport().update()
         finally:
             self._resetting_text = False
+
+    def reset_horizontal_scroll(self) -> None:
+        """Ensure the editor viewport starts from the complete left edge horizontally."""
+        hsb = self.horizontalScrollBar()
+        if hsb is not None and hsb.value() != 0:
+            hsb.setValue(0)
 
     def setPlainText(self, text: str) -> None:
         """Set editor plain text, reset undo history, refresh regions, and apply block margins in one pass."""
@@ -1536,6 +1544,7 @@ class MarkdownEditor(QTextEdit):
                     if b.isValid():
                         self.highlighter.rehighlightBlock(b)
             self.undo_manager.reset(self.toPlainText(), cur.anchor(), cur.position())
+            self.reset_horizontal_scroll()
         finally:
             self._resetting_text = False
 
@@ -4329,6 +4338,8 @@ class EditorPanel(QWidget):
         self.editor.highlighter.active_block_number = cur.block().blockNumber()
         self.editor.highlighter.cursor_pos_in_block = cur.positionInBlock()
         self.editor.verticalScrollBar().setValue(max(0, scroll_y))
+        self.editor.reset_horizontal_scroll()
+        QTimer.singleShot(0, self.editor.reset_horizontal_scroll)
         self.editor.viewport().update()
 
     def _finalize_loaded_content(
@@ -4679,6 +4690,7 @@ class EditorPanel(QWidget):
             self.editor.document().setDefaultFont(font)
             mode = QTextEdit.LineWrapMode.WidgetWidth if config.editor.word_wrap else QTextEdit.LineWrapMode.NoWrap
             self.editor.setLineWrapMode(mode)
+            self.editor.reset_horizontal_scroll()
             if config.editor.word_wrap and hasattr(self.editor, "_transient_h_scrollbar"):
                 self.editor._transient_h_scrollbar.hide_immediately()
             metrics = self.editor.fontMetrics()

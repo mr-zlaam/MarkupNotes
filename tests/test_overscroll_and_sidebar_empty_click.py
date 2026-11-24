@@ -12,9 +12,10 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 from PyQt6.QtCore import QEvent, QPoint, QPointF, Qt
 from PyQt6.QtGui import QMouseEvent, QTextCursor
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QTextEdit
 
-from ui.editor import MarkdownEditor
+from core.note import Note
+from ui.editor import EditorPanel, MarkdownEditor
 from ui.sidebar import FolderSidebar
 
 app = QApplication.instance() or QApplication([])
@@ -168,6 +169,30 @@ class TestOverscrollAndSidebarEmptyClick(unittest.TestCase):
             self.assertEqual(created_folders, [("Projects", None)])
 
             sidebar.deleteLater()
+
+    def test_nowrap_restore_viewport_keeps_horizontal_scroll_at_left_edge(self) -> None:
+        """Verify reopening/restoring a long unwrapped note starts at horizontal scroll 0."""
+        with tempfile.TemporaryDirectory() as tmp:
+            note_path = Path(tmp) / "long_line.md"
+            long_line = "start " + ("word " * 80) + "end"
+            note_path.write_text(long_line, encoding="utf-8")
+
+            panel = EditorPanel()
+            panel.resize(480, 400)
+            panel.editor.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
+            panel.show()
+            app.processEvents()
+
+            note = Note.from_file(note_path)
+            # Simulate reopening with cursor saved near the far right end of the long line
+            panel.set_pending_restore_state(note_path, len(long_line) - 2, 0)
+            panel.load_note(note)
+            app.processEvents()
+
+            self.assertGreater(panel.editor.horizontalScrollBar().maximum(), 0)
+            self.assertEqual(panel.editor.horizontalScrollBar().value(), 0)
+
+            panel.deleteLater()
 
 
 if __name__ == "__main__":
