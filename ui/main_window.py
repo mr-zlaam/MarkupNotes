@@ -710,6 +710,10 @@ class MainWindow(QMainWindow):
 
     def _apply_note_list_view(self, preserve_path: Optional[str] = None, emit_selection: bool = True) -> None:
         """Filter `_all_current_notes` against search bar and update the note list widget."""
+        self.note_list.set_path_context(
+            self.storage.root_dir,
+            show_relative_path=(self._current_folder is None),
+        )
         query = self.note_list.search_bar.text().strip().lower()
 
         if query:

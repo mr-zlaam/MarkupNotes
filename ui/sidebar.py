@@ -303,6 +303,22 @@ class FolderSidebar(QWidget):
             and event.type() == QEvent.Type.KeyPress
         ):
             key_event = event
+            if key_event.key() == Qt.Key.Key_F2:
+                no_mod = not (
+                    key_event.modifiers()
+                    & (
+                        Qt.KeyboardModifier.ControlModifier
+                        | Qt.KeyboardModifier.AltModifier
+                        | Qt.KeyboardModifier.MetaModifier
+                    )
+                )
+                if no_mod and not self._is_selection_mode:
+                    current_item = self.tree_widget.currentItem()
+                    if current_item is not None:
+                        folder = current_item.data(0, Qt.ItemDataRole.UserRole)
+                        if folder is not None:
+                            self.rename_folder_requested.emit(folder)
+                            return True
             if key_event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
                 if self._is_selection_mode:
                     if self._selected_folders:

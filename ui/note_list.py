@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Dict, List, Optional, Set
 
 from PyQt6.QtCore import QEvent, QModelIndex, QObject, QPoint, QRect, QRectF, QSize, Qt, pyqtSignal
@@ -34,6 +35,7 @@ from utils.icons import (
     create_color_circle_icon,
     create_done_icon,
     create_edit_icon,
+    create_folder_icon,
     create_markdown_icon,
     create_notes_toggle_icon,
     create_plus_icon,
@@ -53,7 +55,11 @@ class NoteCardDelegate(QStyledItemDelegate):
 
     def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:
         scale = getattr(self.panel, "ui_scale", 1.0)
-        return QSize(option.rect.width(), max(48, int(round(64 * scale))))
+        note: Optional[Note] = index.data(Qt.ItemDataRole.UserRole)
+        has_rel_path = note is not None and bool(self.panel.get_note_relative_folder(note))
+        base_height = 78 if has_rel_path else 64
+        min_height = 58 if has_rel_path else 48
+        return QSize(option.rect.width(), max(min_height, int(round(base_height * scale))))
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex) -> None:
         painter.save()
@@ -163,6 +169,31 @@ class NoteCardDelegate(QStyledItemDelegate):
         elided_snippet = time_metrics.elidedText(note.preview_snippet, Qt.TextElideMode.ElideRight, snippet_width)
         painter.drawText(snippet_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, elided_snippet)
 
+        # 3. Draw Relative Folder Path (only in 'All Notes' for notes inside subfolders)
+        rel_folder = self.panel.get_note_relative_folder(note)
+        if rel_folder:
+            path_y = rect.top() + int(round(51 * scale))
+            path_h = max(12, int(round(16 * scale)))
+            icon_sz = max(10, int(round(11 * scale)))
+            icon_y = path_y + max(0, (path_h - icon_sz) // 2)
+            path_x_start = rect.left() + text_left_offset
+
+            folder_icon = create_folder_icon(color="#7a7a84", size=icon_sz, stroke_width=1.5)
+            folder_icon.paint(painter, path_x_start, icon_y, icon_sz, icon_sz)
+
+            path_font = QFont(option.font)
+            path_font.setPointSize(max(7, int(round(8 * scale))))
+            painter.setFont(path_font)
+            path_metrics = QFontMetrics(path_font)
+
+            path_text_x = path_x_start + icon_sz + int(round(5 * scale))
+            path_width = max(0, rect.right() - path_text_x - 10)
+            elided_path = path_metrics.elidedText(rel_folder, Qt.TextElideMode.ElideMiddle, path_width)
+            path_rect = QRect(path_text_x, path_y, path_width, path_h)
+
+            painter.setPen(QColor("#7a7a84"))
+            painter.drawText(path_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, elided_path)
+
         painter.restore()
 
 
@@ -184,10 +215,36 @@ class NoteListPanel(QWidget):
         super().__init__(parent=parent)
         self.ui_scale: float = 1.0
         self._notes: List[Note] = []
+        self._notes_root: Optional[Path] = None
+        self._show_relative_path: bool = False
         self._is_selection_mode: bool = False
         self._selected_paths: Set[str] = set()
         self._note_colors: Dict[str, str] = {}
         self._init_ui()
+
+    def set_path_context(self, notes_root: Optional[Path], show_relative_path: bool) -> None:
+        """Configure whether cards display subfolder relative paths (used in All Notes view)."""
+        changed = (
+            self._notes_root != notes_root
+            or self._show_relative_path != bool(show_relative_path)
+        )
+        self._notes_root = notes_root
+        self._show_relative_path = bool(show_relative_path)
+        if changed:
+            self.list_widget.doItemsLayout()
+            self.list_widget.viewport().update()
+
+    def get_note_relative_folder(self, note: Note) -> str:
+        """Return relative parent folder path (e.g. 'projects/markupnotes') or '' if omitted."""
+        if not self._show_relative_path or self._notes_root is None:
+            return ""
+        try:
+            rel_parent = note.path.parent.relative_to(self._notes_root)
+        except ValueError:
+            return ""
+        if rel_parent == Path("."):
+            return ""
+        return rel_parent.as_posix()
 
     def set_ui_scale(self, scale: float) -> None:
         """Update UI scaling factor and refresh note list layout."""
