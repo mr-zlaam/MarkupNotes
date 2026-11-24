@@ -113,6 +113,7 @@ class MainWindow(QMainWindow):
         self.editor.content_saved.connect(self._on_content_saved)
         self.editor.title_changed.connect(self._on_note_title_changed)
         self.editor.create_note_with_content.connect(self._on_create_note_with_content)
+        self.editor.create_note_with_title.connect(self._on_create_note_with_title)
         self.editor.delete_requested.connect(self._on_delete_note)
         self.editor.expand_notes_requested.connect(self._toggle_notes_list)
         self.editor.open_file_requested.connect(self._on_open_file_dialog)
@@ -676,12 +677,13 @@ class MainWindow(QMainWindow):
             self.backup_panel.schedule_auto_backup()
         QTimer.singleShot(500, self._clear_saving_flag)
 
-    def _on_create_note_with_content(self, initial_content: str) -> None:
-        """Create a new note with typed content when user writes on empty canvas."""
+    def _create_note_from_canvas(self, initial_title: str, initial_content: str) -> None:
+        """Create and persist a new note from empty-canvas edits without disturbing cursor focus."""
         self._is_saving_internally = True
-        new_note = self.storage.create_note(folder=self._current_folder, initial_title="Untitled")
+        new_note = self.storage.create_note(folder=self._current_folder, initial_title=initial_title)
         if new_note is not None:
-            self.storage.save_note_content(new_note.path, initial_content)
+            if initial_content:
+                self.storage.save_note_content(new_note.path, initial_content)
             self._current_note = Note.from_file(new_note.path)
             if self._current_note is not None:
                 self.editor.update_meta(self._current_note)
@@ -689,6 +691,14 @@ class MainWindow(QMainWindow):
                 self.backup_panel.refresh_status()
                 self.backup_panel.schedule_auto_backup()
         QTimer.singleShot(500, self._clear_saving_flag)
+
+    def _on_create_note_with_content(self, initial_content: str) -> None:
+        """Create a new note with typed content when user writes on empty canvas."""
+        self._create_note_from_canvas("Untitled", initial_content)
+
+    def _on_create_note_with_title(self, initial_title: str, initial_content: str) -> None:
+        """Create a new note with a custom title when user types a title on empty canvas."""
+        self._create_note_from_canvas(initial_title, initial_content)
 
     def _on_content_saved(self, new_content: str) -> None:
         if self._current_note is None:

@@ -3410,7 +3410,8 @@ class EditorPanel(QWidget):
 
     content_saved = pyqtSignal(str)  # Emits new content when debounced auto-save fires
     title_changed = pyqtSignal(str)  # Emits new title when debounced title editing fires
-    create_note_with_content = pyqtSignal(str)  # Emitted when user types on empty canvas
+    create_note_with_content = pyqtSignal(str)  # Emitted when user types body on empty canvas
+    create_note_with_title = pyqtSignal(str, str)  # Emitted when user types title on empty canvas (title, content)
     delete_requested = pyqtSignal()
     expand_notes_requested = pyqtSignal()
     open_file_requested = pyqtSignal()
@@ -3524,9 +3525,8 @@ class EditorPanel(QWidget):
 
         layout.addLayout(header)
 
-        # Frameless note title input (Notion/Craft aesthetic)
+        # Frameless note title input (Notion/Craft aesthetic) — always enabled so users can title new notes on empty canvas
         self.title_edit = NoteTitleEdit(parent=self)
-        self.title_edit.setEnabled(False)
         self.title_edit.enter_pressed.connect(self._on_title_enter_or_down)
         self.title_edit.down_pressed.connect(self._on_title_enter_or_down)
         self.title_edit.textEdited.connect(self._on_title_edited)
@@ -3672,8 +3672,13 @@ class EditorPanel(QWidget):
         new_title = self.title_edit.text().strip()
         if not new_title:
             return
-        if self._current_note is not None and new_title != self._current_note.title:
-            self.title_changed.emit(new_title)
+        if self._current_note is not None:
+            if new_title != self._current_note.title:
+                self.title_changed.emit(new_title)
+        else:
+            if self._save_timer.isActive():
+                self._save_timer.stop()
+            self.create_note_with_title.emit(new_title, self.editor.toPlainText())
 
     def _show_export_menu(self) -> None:
         """Display export format menu and launch native desktop file chooser."""
@@ -3782,7 +3787,7 @@ class EditorPanel(QWidget):
             self.export_btn.setEnabled(False)
             self.title_edit.blockSignals(True)
             self.title_edit.setText("")
-            self.title_edit.setEnabled(False)
+            self.title_edit.setEnabled(True)
             self.title_edit.blockSignals(False)
 
             self.editor.blockSignals(True)
@@ -3832,6 +3837,8 @@ class EditorPanel(QWidget):
     def update_meta(self, note: Note) -> None:
         """Update only the metadata header without reloading the editor document."""
         self._current_note = note
+        self.export_btn.setEnabled(True)
+        self.title_edit.setEnabled(True)
         folder_name = note.path.parent.name
         self.meta_label.setText(f"{folder_name}  •  Edited {note.formatted_time}")
         if not self.title_edit.hasFocus() and self.title_edit.text() != note.title:
@@ -3881,7 +3888,12 @@ class EditorPanel(QWidget):
         """Emit save signal with latest Markdown text."""
         content = self.editor.toPlainText()
         if self._current_note is None:
-            if content.strip():
+            pending_title = self.title_edit.text().strip()
+            if pending_title:
+                if self._title_timer.isActive():
+                    self._title_timer.stop()
+                self.create_note_with_title.emit(pending_title, content)
+            elif content.strip():
                 self.create_note_with_content.emit(content)
         else:
             self.content_saved.emit(content)
