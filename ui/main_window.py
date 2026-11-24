@@ -139,6 +139,7 @@ class MainWindow(QMainWindow):
 
         # 3. Middle-Right: Editor Canvas
         self.editor = EditorPanel(parent=self.splitter)
+        self.editor.set_vault_root(self.storage.root_dir)
         self.editor.content_saved.connect(self._on_content_saved)
         self.editor.title_changed.connect(self._on_note_title_changed)
         self.editor.create_note_with_content.connect(self._on_create_note_with_content)
@@ -155,6 +156,7 @@ class MainWindow(QMainWindow):
         self.editor.collapse_all_folders_requested.connect(self.sidebar.toggle_collapse_all_folders)
         self.editor.focus_received.connect(self._on_editor_focus_received)
         self.editor.pin_active_note_requested.connect(self._on_toggle_pin_active_note)
+        self.editor.image_pasted.connect(self._on_editor_image_pasted)
 
         # 4. Far Right: Backup & Version History Panel
         self.backup_panel = BackupPanel(
@@ -1780,6 +1782,11 @@ class MainWindow(QMainWindow):
         self._refresh_after_workspace_transfer(
             select_note_path=self._current_note.path if self._current_note else None
         )
+
+    def _on_editor_image_pasted(self) -> None:
+        """Refresh Git status and schedule auto-backup after pasting an image into the vault."""
+        self.backup_panel.refresh_status()
+        self.backup_panel.schedule_auto_backup()
 
     def _refresh_after_workspace_transfer(
         self, select_note_path: Optional[Path] = None

@@ -19,6 +19,7 @@ from PyQt6.QtGui import (
     QFocusEvent,
     QFont,
     QFontMetricsF,
+    QImage,
     QKeyEvent,
     QKeySequence,
     QMouseEvent,
@@ -26,6 +27,7 @@ from PyQt6.QtGui import (
     QPainterPath,
     QPaintEvent,
     QPen,
+    QPixmap,
     QResizeEvent,
     QTextBlock,
     QTextBlockFormat,
@@ -58,6 +60,14 @@ from ui.selection_toolbar import SelectionFormatToolbar
 from ui.slash_menu import SlashCommand, SlashCommandPalette
 from utils.date_card import render_date_card
 from utils.exporter import export_note_to_html, export_note_to_pdf
+from utils.image_engine import (
+    SUPPORTED_IMAGE_EXTENSIONS,
+    copy_pasted_image_file,
+    get_cached_image_pixmap,
+    get_image_card_dimensions,
+    render_image_card,
+    save_pasted_image,
+)
 from utils.video_engine import (
     VideoRegion,
     YouTubeCacheManager,
@@ -201,6 +211,7 @@ class MarkdownEditor(QTextEdit):
     collapse_all_folders_requested = pyqtSignal()
     focus_received = pyqtSignal()
     pin_active_note_requested = pyqtSignal()
+    image_pasted = pyqtSignal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent=parent)
@@ -271,6 +282,8 @@ class MarkdownEditor(QTextEdit):
         self.render_mermaid: bool = True
         self.smart_list: bool = True
         self.code_line_numbers: bool = False
+        self._note_dir: Optional[Path] = None
+        self._vault_root: Optional[Path] = None
 
         # Enable mouse and touch tracking
         self.setMouseTracking(True)
@@ -1359,6 +1372,22 @@ class MarkdownEditor(QTextEdit):
                             for b_num in range(vr.start_block, vr.end_block + 1):
                                 inactive_video_blocks[b_num] = (per_block_h, True)
 
+            inactive_image_blocks: dict[int, tuple[float, bool]] = {}
+            if self.highlighter.image_regions:
+                avail_w = max(200.0, float(self.viewport().width() - 2 * self._horizontal_padding))
+                for ir in self.highlighter.image_regions:
+                    if not (ir.start_block <= active_bn <= ir.end_block):
+                        pix = get_cached_image_pixmap(
+                            ir.raw_src,
+                            note_dir=self._note_dir,
+                            root_dir=self._vault_root,
+                        )
+                        _, img_h = get_image_card_dimensions(pix, avail_w, ui_scale=scale)
+                        inactive_image_blocks[ir.start_block] = (
+                            float(img_h + round(12.0 * scale)),
+                            True,
+                        )
+
             def _apply_to_block(b: QTextBlock) -> None:
                 b_num = b.blockNumber()
                 text = b.text()
@@ -1374,6 +1403,9 @@ class MarkdownEditor(QTextEdit):
                     target_lh_type = QTextBlockFormat.LineHeightTypes.FixedHeight.value
                 elif b_num in inactive_video_blocks:
                     target_lh, target_nb = inactive_video_blocks[b_num]
+                    target_lh_type = QTextBlockFormat.LineHeightTypes.FixedHeight.value
+                elif b_num in inactive_image_blocks:
+                    target_lh, target_nb = inactive_image_blocks[b_num]
                     target_lh_type = QTextBlockFormat.LineHeightTypes.FixedHeight.value
                 else:
                     target_lh = 120.0
@@ -1687,7 +1719,53 @@ class MarkdownEditor(QTextEdit):
         menu.exec(event.globalPos())
 
     def insertFromMimeData(self, source: QMimeData) -> None:
-        """Ensure pasted content is always inserted as clean Markdown / plain text in a single edit block."""
+        """Handle pasting clipboard images, copied image files, or clean plain-text Markdown."""
+        base_dir = self._note_dir or self._vault_root
+
+        # 1. Local image file URLs copied from file manager
+        if base_dir is not None and source.hasUrls():
+            image_paths: list[Path] = []
+            for url in source.urls():
+                if url.isLocalFile():
+                    local_path = Path(url.toLocalFile())
+                    if local_path.is_file() and local_path.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS:
+                        image_paths.append(local_path)
+            if image_paths:
+                snippets: list[str] = []
+                for img_path in image_paths:
+                    rel = copy_pasted_image_file(img_path, base_dir)
+                    if rel:
+                        snippets.append(f"![{img_path.stem}]({rel})")
+                if snippets:
+                    cursor = self.textCursor()
+                    cursor.beginEditBlock()
+                    try:
+                        cursor.insertText("\n".join(snippets))
+                    finally:
+                        cursor.endEditBlock()
+                    self.image_pasted.emit()
+                    return
+
+        # 2. Raw clipboard image (screenshot or browser Copy Image)
+        if base_dir is not None and source.hasImage():
+            raw_img = source.imageData()
+            qimg: Optional[QImage] = None
+            if isinstance(raw_img, QImage):
+                qimg = raw_img
+            elif isinstance(raw_img, QPixmap):
+                qimg = raw_img.toImage()
+            if qimg is not None and not qimg.isNull():
+                rel = save_pasted_image(qimg, base_dir)
+                if rel:
+                    cursor = self.textCursor()
+                    cursor.beginEditBlock()
+                    try:
+                        cursor.insertText(f"![Image]({rel})")
+                    finally:
+                        cursor.endEditBlock()
+                    self.image_pasted.emit()
+                    return
+
         if source.hasText():
             text = source.text()
             cursor = self.textCursor()
@@ -1704,7 +1782,7 @@ class MarkdownEditor(QTextEdit):
         """Return True if a substring or line contains characters that can trigger region cards."""
         if not text:
             return False
-        if "|" in text or "$" in text or "`" in text or "<" in text:
+        if "|" in text or "$" in text or "`" in text or "<" in text or "![" in text:
             return True
         lower = text.lower()
         return "youtu" in lower or "date" in lower
@@ -1718,6 +1796,7 @@ class MarkdownEditor(QTextEdit):
             or hl.mermaid_regions
             or hl.code_regions
             or hl.video_regions
+            or hl.image_regions
             or hl.date_blocks
         )
 
@@ -1902,6 +1981,11 @@ class MarkdownEditor(QTextEdit):
                 is_in = vr.start_block <= new_block_num <= vr.end_block
                 if was_in != is_in:
                     dirty_region_blocks.update(range(vr.start_block, vr.end_block + 1))
+            for ir in self.highlighter.image_regions:
+                was_in = ir.start_block <= old_block_num <= ir.end_block
+                is_in = ir.start_block <= new_block_num <= ir.end_block
+                if was_in != is_in:
+                    dirty_region_blocks.update(range(ir.start_block, ir.end_block + 1))
             if dirty_region_blocks:
                 self._schedule_margin_update(blocks=dirty_region_blocks)
 
@@ -2160,6 +2244,49 @@ class MarkdownEditor(QTextEdit):
                 painter.setBrush(QBrush(QColor(38, 79, 135, 120)))
                 corner_r = round(10.0 * scale, 1)
                 painter.drawRoundedRect(card_rect, corner_r, corner_r)
+                painter.restore()
+
+        # 4.8 Render Inactive Markdown Image Previews (![alt](path))
+        for ir in self.highlighter.image_regions:
+            if ir.start_block <= active_bn <= ir.end_block:
+                continue
+            b_img = self.document().findBlockByNumber(ir.start_block)
+            if not b_img.isValid():
+                continue
+
+            top_doc_rect = doc_layout.blockBoundingRect(b_img)
+            block_vp_top = float(top_doc_rect.top()) - scroll_y
+            r_top = self.cursorRect(QTextCursor(b_img))
+
+            avail_w = max(200.0, float(vp_width - 2 * self._horizontal_padding))
+            pix = get_cached_image_pixmap(
+                ir.raw_src,
+                note_dir=self._note_dir,
+                root_dir=self._vault_root,
+            )
+            img_w, img_h = get_image_card_dimensions(pix, avail_w, ui_scale=scale)
+            img_top = block_vp_top + round(6.0 * scale)
+            img_rect = QRectF(float(r_top.left()), img_top, img_w, img_h)
+
+            if img_rect.top() > vp_height or img_rect.bottom() < 0:
+                continue
+            self._rendered_block_rects.append((ir.start_block, ir.end_block, img_rect))
+            render_image_card(
+                painter,
+                img_rect,
+                pix,
+                ir.alt_text,
+                ir.raw_src,
+                ui_scale=scale,
+            )
+
+            if has_sel and (ir.start_block <= sel_end_b and ir.end_block >= sel_start_b):
+                painter.save()
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                painter.setPen(QPen(QColor("#0a84ff"), 1.2))
+                painter.setBrush(QBrush(QColor(38, 79, 135, 120)))
+                corner_r = round(8.0 * scale, 1)
+                painter.drawRoundedRect(img_rect, corner_r, corner_r)
                 painter.restore()
 
         # 5. Render Checkboxes, Inactive Bullets & Inactive Inline Math ($...$)
@@ -3913,6 +4040,7 @@ class EditorPanel(QWidget):
     collapse_all_folders_requested = pyqtSignal()
     focus_received = pyqtSignal()
     pin_active_note_requested = pyqtSignal()
+    image_pasted = pyqtSignal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent=parent)
@@ -4053,6 +4181,7 @@ class EditorPanel(QWidget):
         self.editor.collapse_all_folders_requested.connect(self.collapse_all_folders_requested.emit)
         self.editor.focus_received.connect(self.focus_received.emit)
         self.editor.pin_active_note_requested.connect(self.pin_active_note_requested.emit)
+        self.editor.image_pasted.connect(self.image_pasted.emit)
 
         # In-note Find & Replace Bar
         self.find_replace_bar = FindReplaceBar(parent=self)
@@ -4527,6 +4656,7 @@ class EditorPanel(QWidget):
         self._save_active_viewport_state()
 
         self._current_note = note
+        self.editor._note_dir = note.path.parent if note is not None else self.editor._vault_root
         self._pending_load_note = None
         self._is_loading_note = False
         self._loading_overlay.hide()
@@ -4644,9 +4774,16 @@ class EditorPanel(QWidget):
             size_bytes=size_bytes,
         )
 
+    def set_vault_root(self, root_dir: Path) -> None:
+        """Set vault root directory for resolving relative Markdown image paths and paste targets."""
+        self.editor._vault_root = root_dir
+        if self.editor._note_dir is None:
+            self.editor._note_dir = root_dir
+
     def update_meta(self, note: Note) -> None:
         """Update only the metadata header without reloading the editor document."""
         self._current_note = note
+        self.editor._note_dir = note.path.parent
         self.export_btn.setEnabled(True)
         self.title_edit.setEnabled(True)
         folder_name = note.path.parent.name

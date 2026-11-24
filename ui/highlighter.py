@@ -20,6 +20,10 @@ from utils.code_engine import (
     find_code_regions,
 )
 from utils.date_format import DATE_BADGE_PATTERN as DATE_PATTERN, parse_date_string
+from utils.image_engine import (
+    ImageRegion,
+    find_image_regions,
+)
 from utils.video_engine import (
     VideoRegion,
     find_video_regions,
@@ -94,6 +98,7 @@ class MarkdownHighlighter(QSyntaxHighlighter):
         self.mermaid_regions: List[MermaidRegion] = []
         self.code_regions: List[CodeRegion] = []
         self.video_regions: List[VideoRegion] = []
+        self.image_regions: List[ImageRegion] = []
         self.date_blocks: Dict[int, date] = {}
         self._block_modes: Dict[int, Tuple[str, int]] = {}
         self._ui_scale: float = 1.0
@@ -274,8 +279,9 @@ class MarkdownHighlighter(QSyntaxHighlighter):
             self.mermaid_regions = []
             self.code_regions = []
 
-        if "youtu" in full_lower or "<iframe" in full_lower:
-            excluded_blocks: Set[int] = set()
+        excluded_blocks: Optional[Set[int]] = None
+        if "youtu" in full_lower or "<iframe" in full_lower or "![" in full_text:
+            excluded_blocks = set()
             for tr in self.table_regions:
                 excluded_blocks.update(range(tr.start_block, tr.end_block + 1))
             for mr in self.math_regions:
@@ -284,9 +290,16 @@ class MarkdownHighlighter(QSyntaxHighlighter):
                 excluded_blocks.update(range(mmd.start_block, mmd.end_block + 1))
             for cr in self.code_regions:
                 excluded_blocks.update(range(cr.start_block, cr.end_block + 1))
+
+        if "youtu" in full_lower or "<iframe" in full_lower:
             self.video_regions = find_video_regions(doc, excluded_blocks=excluded_blocks)
         else:
             self.video_regions = []
+
+        if "![" in full_text:
+            self.image_regions = find_image_regions(doc, excluded_blocks=excluded_blocks)
+        else:
+            self.image_regions = []
 
         self.date_blocks.clear()
         if "@date" in full_lower or "[date:" in full_lower:
@@ -396,6 +409,17 @@ class MarkdownHighlighter(QSyntaxHighlighter):
             else:
                 for b in range(vr.start_block, vr.end_block + 1):
                     new_modes[b] = ("inactive_video", video_pt)
+
+        # 7. Markdown Image Previews (![alt](path))
+        image_pt = max(10, int(round(14 * scale)))
+        for ir in self.image_regions:
+            active_in_image = ir.start_block <= self.active_block_number <= ir.end_block
+            if active_in_image:
+                for b in range(ir.start_block, ir.end_block + 1):
+                    new_modes[b] = ("active_image", 12)
+            else:
+                for b in range(ir.start_block, ir.end_block + 1):
+                    new_modes[b] = ("inactive_image", image_pt)
 
         self._block_modes = new_modes
         changed_blocks: Set[int] = set()
@@ -509,7 +533,7 @@ class MarkdownHighlighter(QSyntaxHighlighter):
                         self.setFormat(m.start(), 1, self.table_pipe_format)
                 return
 
-            if mode in ("inactive_math", "inactive_mermaid", "inactive_code", "inactive_date", "inactive_video"):
+            if mode in ("inactive_math", "inactive_mermaid", "inactive_code", "inactive_date", "inactive_video", "inactive_image"):
                 self.setCurrentBlockState(0)
                 tall_fmt = QTextCharFormat()
                 tall_fmt.setFontPointSize(pt_size)
@@ -517,7 +541,7 @@ class MarkdownHighlighter(QSyntaxHighlighter):
                 self.setFormat(0, max(1, len(text)), tall_fmt)
                 return
 
-            if mode == "active_video":
+            if mode in ("active_video", "active_image"):
                 self.setCurrentBlockState(0)
                 self.setFormat(0, len(text), self.code_block_format)
                 return

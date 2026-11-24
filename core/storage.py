@@ -32,7 +32,7 @@ class StorageManager:
             for item in self.root_dir.rglob("*"):
                 if item.is_dir():
                     rel_parts = item.relative_to(self.root_dir).parts
-                    if not any(part.startswith(".") for part in rel_parts):
+                    if not any(part.startswith(".") or part.lower() == "images" for part in rel_parts):
                         folders.append(item)
         except (PermissionError, FileNotFoundError):
             pass
