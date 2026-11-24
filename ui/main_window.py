@@ -66,6 +66,10 @@ class MainWindow(QMainWindow):
         self._all_current_notes: List[Note] = []
         self._is_saving_internally: bool = False
         self._save_queue = AsyncSaveQueue()
+        self._session_timer = QTimer(self)
+        self._session_timer.setSingleShot(True)
+        self._session_timer.setInterval(800)
+        self._session_timer.timeout.connect(self._flush_session_state)
         self._active_pane_anim: Optional[QVariantAnimation] = None
         self._registered_shortcuts: List[QShortcut] = []
         self._active_modal_overlay: Optional[QWidget] = None
@@ -448,22 +452,123 @@ class MainWindow(QMainWindow):
             self.config_manager.set_folder_color(new_name, color)
             self.sidebar.set_folder_colors(self.config.appearance.folder_colors)
 
+    def _serialize_workspace_path(self, path: Optional[Path]) -> str:
+        """Convert a workspace file/folder path to a portable relative string under storage.root_dir."""
+        if path is None:
+            return ""
+        try:
+            rel = path.resolve().relative_to(self.storage.root_dir.resolve())
+            rel_str = rel.as_posix()
+            return "" if rel_str == "." else rel_str
+        except ValueError:
+            return str(path)
+
+    def _resolve_workspace_path(self, raw: str, *, expect_dir: bool) -> Optional[Path]:
+        """Resolve a saved session path back to an existing workspace file or folder."""
+        if not raw:
+            return None
+        candidate = Path(raw)
+        if not candidate.is_absolute():
+            candidate = self.storage.root_dir / candidate
+        try:
+            resolved = candidate.resolve()
+            root_resolved = self.storage.root_dir.resolve()
+            if resolved != root_resolved and root_resolved not in resolved.parents:
+                return None
+            rel_parts = resolved.relative_to(root_resolved).parts
+            if any(part.startswith(".") for part in rel_parts):
+                return None
+            if not resolved.exists():
+                return None
+            if expect_dir and not resolved.is_dir():
+                return None
+            if not expect_dir and not resolved.is_file():
+                return None
+            return resolved
+        except (OSError, ValueError):
+            return None
+
+    def _capture_session_state(self, *, persist: bool = False) -> None:
+        """Capture current folder, note, cursor, and scroll state into ConfigManager."""
+        if self._session_timer.isActive() and persist:
+            self._session_timer.stop()
+
+        folder_str = self._serialize_workspace_path(self._current_folder)
+        if self._current_note is not None:
+            note_str = self._serialize_workspace_path(self._current_note.path)
+            if self.editor._is_loading_note:
+                cursor_pos = self.config.session.last_cursor_pos
+                scroll_y = self.config.session.last_scroll_y
+            else:
+                cursor_pos = self.editor.editor.textCursor().position()
+                scroll_y = self.editor.editor.verticalScrollBar().value()
+        else:
+            note_str = ""
+            cursor_pos = 0
+            scroll_y = 0
+
+        self.config_manager.update_session(
+            last_folder=folder_str,
+            last_note=note_str,
+            last_cursor_pos=cursor_pos,
+            last_scroll_y=scroll_y,
+            save=persist,
+        )
+
+    def _flush_session_state(self) -> None:
+        """Persist debounced session state updates to settings.json."""
+        self._capture_session_state(persist=True)
+
+    def _schedule_session_save(self) -> None:
+        """Update in-memory session state and debounce disk persistence."""
+        self._capture_session_state(persist=False)
+        self._session_timer.start()
+
     def _load_initial_data(self) -> None:
-        """Load folders and notes on launch."""
+        """Load folders and restore the user's last active folder, note, cursor, and scroll offset."""
         self.sidebar.set_folder_colors(self.config.appearance.folder_colors)
         self.note_list.set_note_colors(self.config.appearance.note_colors)
         folders = self.storage.get_folders()
-        self.sidebar.set_folders(folders)
-        self._update_watcher_paths()
-        self._refresh_notes()
 
-        # If an initial file or directory was requested (CLI or file manager), open it
+        # If an initial file or directory was requested (CLI or file manager), it takes priority
         if self._initial_path is not None:
+            self.sidebar.set_folders(folders)
+            self._update_watcher_paths()
+            self._refresh_notes()
             self.open_file_or_folder(self._initial_path)
             return
 
-        # If no notes exist on launch, auto-create one so user can type immediately
-        if not self._all_current_notes:
+        restored_folder: Optional[Path] = None
+        restored_note: Optional[Path] = None
+        restored_cursor = 0
+        restored_scroll = 0
+        if self.config.general.startup_action == "last_note":
+            sess = self.config.session
+            cand_folder = self._resolve_workspace_path(sess.last_folder, expect_dir=True)
+            if cand_folder is not None and cand_folder != self.storage.root_dir.resolve():
+                restored_folder = cand_folder
+
+            cand_note = self._resolve_workspace_path(sess.last_note, expect_dir=False)
+            if cand_note is not None:
+                if restored_folder is None or cand_note.parent == restored_folder:
+                    restored_note = cand_note
+                    restored_cursor = max(0, sess.last_cursor_pos)
+                    restored_scroll = max(0, sess.last_scroll_y)
+
+        self._current_folder = restored_folder
+        self.sidebar.set_folders(folders, current_selection=restored_folder)
+        self._update_watcher_paths()
+
+        if restored_note is not None:
+            self.editor.set_pending_restore_state(restored_note, restored_cursor, restored_scroll)
+
+        self._refresh_notes(
+            preserve_path=str(restored_note) if restored_note is not None else None,
+            emit_selection=True,
+        )
+
+        # Auto-create an initial note only on a brand-new empty workspace
+        if not self._all_current_notes and restored_folder is None and not folders:
             self._on_create_note()
         elif self._current_note is not None:
             self.editor.editor.setFocus()
@@ -627,6 +732,7 @@ class MainWindow(QMainWindow):
             self._current_note.content = None
         self._current_folder = folder
         self._refresh_notes()
+        self._schedule_session_save()
 
     def _on_create_folder(
         self, folder_name: str, parent_folder: Optional[Path] = None
@@ -687,6 +793,7 @@ class MainWindow(QMainWindow):
             prev_note.content = None
         self._current_note = note
         self.editor.load_note(note)
+        self._schedule_session_save()
 
     def _on_create_note(self) -> None:
         self._is_saving_internally = True
@@ -1188,8 +1295,9 @@ class MainWindow(QMainWindow):
         self.editor.sync_active_cache_stat()
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        """Ensure any pending note edits and window geometry are persisted before exit."""
+        """Ensure any pending note edits, session state, and window geometry are persisted before exit."""
         self.flush_pending_save()
+        self._capture_session_state(persist=False)
         if not self.isMaximized():
             self.config.window.width = self.width()
             self.config.window.height = self.height()

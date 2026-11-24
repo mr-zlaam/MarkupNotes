@@ -67,6 +67,14 @@ class BackupConfig:
 
 
 @dataclass
+class SessionConfig:
+    last_folder: str = ""
+    last_note: str = ""
+    last_cursor_pos: int = 0
+    last_scroll_y: int = 0
+
+
+@dataclass
 class AppSettings:
     general: GeneralConfig = field(default_factory=GeneralConfig)
     window: WindowConfig = field(default_factory=WindowConfig)
@@ -75,6 +83,7 @@ class AppSettings:
     markdown: MarkdownConfig = field(default_factory=MarkdownConfig)
     appearance: AppearanceConfig = field(default_factory=AppearanceConfig)
     backup: BackupConfig = field(default_factory=BackupConfig)
+    session: SessionConfig = field(default_factory=SessionConfig)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "AppSettings":
@@ -135,6 +144,14 @@ class AppSettings:
             github_repo_url=str(bak_data.get("github_repo_url", "")),
         )
 
+        sess_data = data.get("session", {})
+        session = SessionConfig(
+            last_folder=str(sess_data.get("last_folder", "")),
+            last_note=str(sess_data.get("last_note", "")),
+            last_cursor_pos=max(0, int(sess_data.get("last_cursor_pos", 0))),
+            last_scroll_y=max(0, int(sess_data.get("last_scroll_y", 0))),
+        )
+
         return cls(
             general=general,
             window=win,
@@ -143,6 +160,7 @@ class AppSettings:
             markdown=markdown,
             appearance=appearance,
             backup=backup,
+            session=session,
         )
 
 
@@ -330,6 +348,27 @@ class ConfigManager:
         self.settings.appearance.folder_colors.clear()
         self.settings.appearance.note_colors.clear()
         self.save()
+
+    def update_session(
+        self,
+        *,
+        last_folder: Optional[str] = None,
+        last_note: Optional[str] = None,
+        last_cursor_pos: Optional[int] = None,
+        last_scroll_y: Optional[int] = None,
+        save: bool = True,
+    ) -> None:
+        """Update and optionally persist last active folder, note, cursor, and scroll state."""
+        if last_folder is not None:
+            self.settings.session.last_folder = last_folder
+        if last_note is not None:
+            self.settings.session.last_note = last_note
+        if last_cursor_pos is not None:
+            self.settings.session.last_cursor_pos = max(0, int(last_cursor_pos))
+        if last_scroll_y is not None:
+            self.settings.session.last_scroll_y = max(0, int(last_scroll_y))
+        if save:
+            self.save()
 
     def reset_to_defaults(self) -> None:
         """Reset all settings to default configuration."""

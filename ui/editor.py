@@ -3788,6 +3788,7 @@ class EditorPanel(QWidget):
         self._active_cached_path: Optional[Path] = None
         self._load_generation_id: int = 0
         self._pending_load_note: Optional[Note] = None
+        self._pending_restore_state: Optional[Tuple[Path, int, int]] = None
         self._is_loading_note: bool = False
         self._load_pool = QThreadPool()
         self._load_pool.setMaxThreadCount(2)
@@ -4243,6 +4244,25 @@ class EditorPanel(QWidget):
         """Evict all inactive cached documents (e.g. after zoom, font, or sync changes)."""
         self._doc_cache.clear(keep_path=self._active_cached_path)
 
+    def set_pending_restore_state(self, path: Path, cursor_pos: int, scroll_y: int) -> None:
+        """Schedule cursor and scroll restoration for the next load of `path`."""
+        self._pending_restore_state = (path, max(0, cursor_pos), max(0, scroll_y))
+
+    def restore_viewport_state(self, cursor_pos: int, scroll_y: int) -> None:
+        """Restore caret position and vertical scroll offset on the active document cleanly."""
+        doc = self.editor.document()
+        doc_len = max(0, doc.characterCount() - 1)
+        clamped_pos = max(0, min(doc_len, cursor_pos))
+
+        cur = QTextCursor(doc)
+        cur.setPosition(clamped_pos)
+        self.editor.setTextCursor(cur)
+        self.editor.undo_manager.update_cursor(clamped_pos, clamped_pos)
+        self.editor.highlighter.active_block_number = cur.block().blockNumber()
+        self.editor.highlighter.cursor_pos_in_block = cur.positionInBlock()
+        self.editor.verticalScrollBar().setValue(max(0, scroll_y))
+        self.editor.viewport().update()
+
     def _finalize_loaded_content(
         self,
         note: Note,
@@ -4271,6 +4291,17 @@ class EditorPanel(QWidget):
         self._pending_load_note = None
         self._loading_overlay.hide()
 
+        restored_cursor_pos = 0
+        restored_scroll_y = 0
+        if self._pending_restore_state is not None:
+            restore_path, r_pos, r_scroll = self._pending_restore_state
+            self._pending_restore_state = None
+            if restore_path == note.path:
+                self.restore_viewport_state(r_pos, r_scroll)
+                cur = self.editor.textCursor()
+                restored_cursor_pos = cur.position()
+                restored_scroll_y = self.editor.verticalScrollBar().value()
+
         if mtime_ns is not None and size_bytes is not None:
             ui_scale, font_size_pt, font_family = self._current_style_signature()
             entry = CachedNoteDocument(
@@ -4278,9 +4309,9 @@ class EditorPanel(QWidget):
                 document=doc,
                 highlighter=hl,
                 undo_manager=undo_mgr,
-                scroll_y=0,
-                cursor_anchor=0,
-                cursor_pos=0,
+                scroll_y=restored_scroll_y,
+                cursor_anchor=restored_cursor_pos,
+                cursor_pos=restored_cursor_pos,
                 mtime_ns=mtime_ns,
                 size_bytes=size_bytes,
                 text_bytes=len(cleaned_content),
@@ -4353,6 +4384,7 @@ class EditorPanel(QWidget):
             self._title_timer.stop()
 
         if note is None:
+            self._pending_restore_state = None
             self._active_cached_path = None
             self.export_btn.setEnabled(False)
             self.title_edit.blockSignals(True)
