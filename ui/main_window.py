@@ -1695,18 +1695,16 @@ class MainWindow(QMainWindow):
             )
         )
 
-        # Invalidate caches & remap active note/folder pointers cleanly
+        # Re-key LRU caches in O(1) and remap active note/folder pointers without blocking disk reads
         if kind == "note":
-            self.editor.invalidate_note_cache(src_path)
-            self.editor.invalidate_note_cache(dst)
+            self.editor.rename_cached_note(src_path, dst)
             if self._current_note is not None and self._current_note.path == src_path:
                 reloaded = Note.from_file(dst)
-                self._current_note = reloaded
                 if reloaded is not None:
-                    self.editor.load_note(reloaded)
+                    self._current_note = reloaded
+                    self.editor.update_meta(reloaded)
         else:
-            self.editor.invalidate_folder_cache(src_path)
-            self.editor.invalidate_folder_cache(dst)
+            self.editor.rename_cached_folder(src_path, dst)
             if self._current_folder is not None:
                 if self._current_folder == src_path:
                     self._current_folder = dst
@@ -1717,9 +1715,9 @@ class MainWindow(QMainWindow):
                 rel_note = self._current_note.path.relative_to(src_path)
                 remapped = dst / rel_note
                 reloaded = Note.from_file(remapped)
-                self._current_note = reloaded
                 if reloaded is not None:
-                    self.editor.load_note(reloaded)
+                    self._current_note = reloaded
+                    self.editor.update_meta(reloaded)
 
         self._refresh_after_workspace_transfer(
             select_note_path=self._current_note.path if self._current_note else None
@@ -1737,20 +1735,27 @@ class MainWindow(QMainWindow):
             return
 
         if record.item_type == "note":
-            self.editor.invalidate_note_cache(record.dst_path)
-            self.editor.invalidate_note_cache(record.src_path)
-            if self._current_note is not None and self._current_note.path == record.dst_path:
-                if record.kind == "move" and record.src_path.exists():
+            if record.kind == "move":
+                self.editor.rename_cached_note(record.dst_path, record.src_path)
+                if record.replaced_backup_path is not None:
+                    self.editor.invalidate_note_cache(record.dst_path)
+                if self._current_note is not None and self._current_note.path == record.dst_path:
                     reloaded = Note.from_file(record.src_path)
-                    self._current_note = reloaded
                     if reloaded is not None:
-                        self.editor.load_note(reloaded)
-                else:
+                        self._current_note = reloaded
+                        self.editor.update_meta(reloaded)
+            else:
+                self.editor.invalidate_note_cache(record.dst_path)
+                if self._current_note is not None and self._current_note.path == record.dst_path:
                     self._current_note = None
                     self.editor.load_note(None)
         else:
-            self.editor.invalidate_folder_cache(record.dst_path)
-            self.editor.invalidate_folder_cache(record.src_path)
+            if record.kind == "move":
+                self.editor.rename_cached_folder(record.dst_path, record.src_path)
+                if record.replaced_backup_path is not None:
+                    self.editor.invalidate_folder_cache(record.dst_path)
+            else:
+                self.editor.invalidate_folder_cache(record.dst_path)
             if self._current_folder is not None:
                 if self._current_folder == record.dst_path:
                     self._current_folder = record.src_path if record.kind == "move" else None
@@ -1765,9 +1770,9 @@ class MainWindow(QMainWindow):
                     rel_note = self._current_note.path.relative_to(record.dst_path)
                     remapped = record.src_path / rel_note
                     reloaded = Note.from_file(remapped)
-                    self._current_note = reloaded
                     if reloaded is not None:
-                        self.editor.load_note(reloaded)
+                        self._current_note = reloaded
+                        self.editor.update_meta(reloaded)
                 else:
                     self._current_note = None
                     self.editor.load_note(None)

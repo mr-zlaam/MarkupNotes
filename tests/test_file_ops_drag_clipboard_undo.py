@@ -250,6 +250,47 @@ class TestFileOpsDragClipboardUndo(unittest.TestCase):
                 win.close()
                 win.deleteLater()
 
+    def test_moving_cached_note_between_folders_and_back_preserves_cache_entry(self) -> None:
+        """Verify moving a cached note between folders and back keeps the same QTextDocument warm."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            folder_a = root / "FolderA"
+            folder_b = root / "FolderB"
+            folder_a.mkdir()
+            folder_b.mkdir()
+            note_a = folder_a / "LargeCached.md"
+            small_a = folder_a / "Small.md"
+            note_a.write_text("# Large\n" + ("hello world\n" * 500), encoding="utf-8")
+            small_a.write_text("# Small", encoding="utf-8")
+
+            win = self._make_window(root)
+            try:
+                win._on_note_selected(Note.from_file(note_a))
+                app.processEvents()
+                orig_entry = win.editor._doc_cache._entries.get(note_a)
+                self.assertIsNotNone(orig_entry)
+                orig_doc = orig_entry.document
+
+                # Move FolderA/LargeCached.md -> FolderB/LargeCached.md
+                win._on_sidebar_item_dropped("note", note_a, folder_b, False)
+                moved_b = folder_b / "LargeCached.md"
+                self.assertNotIn(note_a, win.editor._doc_cache._entries)
+                self.assertIn(moved_b, win.editor._doc_cache._entries)
+                self.assertIs(win.editor._doc_cache._entries[moved_b].document, orig_doc)
+
+                # Move back to FolderA
+                win._on_sidebar_item_dropped("note", moved_b, folder_a, False)
+                self.assertIn(note_a, win.editor._doc_cache._entries)
+                self.assertIs(win.editor._doc_cache._entries[note_a].document, orig_doc)
+
+                # Switch to Small and back -> instant cache hit with same QTextDocument
+                win._on_note_selected(Note.from_file(small_a))
+                win._on_note_selected(Note.from_file(note_a))
+                self.assertIs(win.editor.editor.document(), orig_doc)
+            finally:
+                win.close()
+                win.deleteLater()
+
 
 if __name__ == "__main__":
     unittest.main()

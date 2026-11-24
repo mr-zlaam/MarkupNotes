@@ -1429,14 +1429,30 @@ class MarkdownEditor(QTextEdit):
         self._update_block_margins()
 
     def _configure_document(self, doc: QTextDocument) -> None:
-        """Apply consistent LTR text option, font, and disabled Qt undo stack to a QTextDocument."""
+        """Apply consistent LTR text option, font, and disabled Qt undo stack without forcing re-layout."""
         opt = doc.defaultTextOption()
-        opt.setTextDirection(Qt.LayoutDirection.LeftToRight)
-        opt.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        opt.setWrapMode(QTextOption.WrapMode.WordWrap)
-        doc.setDefaultTextOption(opt)
-        doc.setDefaultFont(self.font())
-        doc.setUndoRedoEnabled(False)
+        if (
+            opt.textDirection() != Qt.LayoutDirection.LeftToRight
+            or opt.alignment() != Qt.AlignmentFlag.AlignLeft
+            or opt.wrapMode() != QTextOption.WrapMode.WordWrap
+        ):
+            opt.setTextDirection(Qt.LayoutDirection.LeftToRight)
+            opt.setAlignment(Qt.AlignmentFlag.AlignLeft)
+            opt.setWrapMode(QTextOption.WrapMode.WordWrap)
+            doc.setDefaultTextOption(opt)
+        target_font = self.font()
+        if doc.defaultFont() != target_font:
+            doc.setDefaultFont(target_font)
+        if doc.isUndoRedoEnabled():
+            doc.setUndoRedoEnabled(False)
+        if doc.characterCount() <= 1:
+            vp_h = self.viewport().height()
+            target_margin = float(max(0, vp_h // 2))
+            root_frame = doc.rootFrame()
+            frame_fmt = root_frame.frameFormat()
+            if abs(frame_fmt.bottomMargin() - target_margin) >= 1.0:
+                frame_fmt.setBottomMargin(target_margin)
+                root_frame.setFrameFormat(frame_fmt)
 
     def _connect_document_signals(self, doc: QTextDocument) -> None:
         doc.contentsChange.connect(self._on_document_contents_change)
@@ -4352,6 +4368,16 @@ class EditorPanel(QWidget):
         self._doc_cache.rename(old_path, new_path)
         if self._active_cached_path == old_path:
             self._active_cached_path = new_path
+
+    def rename_cached_folder(self, old_folder: Path, new_folder: Path) -> None:
+        """Re-key all cached note entries inside old_folder when the folder is moved."""
+        self._doc_cache.rename_folder(old_folder, new_folder)
+        if self._active_cached_path is not None and old_folder in self._active_cached_path.parents:
+            try:
+                rel = self._active_cached_path.relative_to(old_folder)
+                self._active_cached_path = new_folder / rel
+            except ValueError:
+                pass
 
     def invalidate_note_cache(self, path: Path) -> None:
         """Evict a specific note from the document cache."""

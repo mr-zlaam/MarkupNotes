@@ -166,6 +166,21 @@ class NoteDocumentCache:
         self._entries[new_path] = entry
         self._entries.move_to_end(new_path)
 
+    def rename_folder(self, old_folder: Path, new_folder: Path) -> None:
+        """Re-key all cached notes located inside old_folder after moving/renaming the folder."""
+        if old_folder == new_folder:
+            return
+        matching = [
+            p for p in list(self._entries.keys())
+            if old_folder in p.parents
+        ]
+        for old_note_path in matching:
+            try:
+                rel = old_note_path.relative_to(old_folder)
+            except ValueError:
+                continue
+            self.rename(old_note_path, new_folder / rel)
+
     def evict(self, path: Path, *, active_path: Optional[Path] = None) -> None:
         """Remove a specific note path from cache and dispose its document if inactive."""
         entry = self._entries.pop(path, None)
