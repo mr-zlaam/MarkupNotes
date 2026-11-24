@@ -386,6 +386,165 @@ class TestColorSelectionAndHighlighter(unittest.TestCase):
         self.editor._apply_highlight_color("")
         self.assertEqual(self.editor.toPlainText(), "before target after")
 
+    def test_partial_checkbox_prefix_selection_preserves_checkbox(self) -> None:
+        """Verify dragging selection starting inside '- [ ] ' preserves the checkbox prefix."""
+        # Starting at '[' (index 2)
+        self.editor.setPlainText("- [ ] Buy groceries")
+        cursor = self.editor.textCursor()
+        cursor.setPosition(2)
+        cursor.setPosition(len("- [ ] Buy groceries"), QTextCursor.MoveMode.KeepAnchor)
+        self.editor.setTextCursor(cursor)
+
+        self.editor._apply_text_color("#ff453a")
+        self.assertEqual(
+            self.editor.toPlainText(),
+            '- [ ] <span style="color: #ff453a;">Buy groceries</span>',
+        )
+
+        # Starting at ']' (index 4) for highlight color
+        self.editor.setPlainText("- [ ] Buy groceries")
+        cursor = self.editor.textCursor()
+        cursor.setPosition(4)
+        cursor.setPosition(len("- [ ] Buy groceries"), QTextCursor.MoveMode.KeepAnchor)
+        self.editor.setTextCursor(cursor)
+
+        self.editor._apply_highlight_color("#ffd60a")
+        self.assertEqual(
+            self.editor.toPlainText(),
+            '- [ ] <mark style="background-color: #ffd60a;">Buy groceries</mark>',
+        )
+
+    def test_prefix_only_selection_does_not_insert_tags(self) -> None:
+        """Verify selecting only inside a checkbox prefix does not corrupt the markdown."""
+        self.editor.setPlainText("- [ ] Buy groceries")
+        cursor = self.editor.textCursor()
+        cursor.setPosition(1)
+        cursor.setPosition(5, QTextCursor.MoveMode.KeepAnchor)
+        self.editor.setTextCursor(cursor)
+
+        self.editor._apply_text_color("#ff453a")
+        self.assertEqual(self.editor.toPlainText(), "- [ ] Buy groceries")
+
+        self.editor._apply_highlight_color("#ffd60a")
+        self.assertEqual(self.editor.toPlainText(), "- [ ] Buy groceries")
+
+    def test_blockquote_and_partial_heading_prefixes_preserved(self) -> None:
+        """Verify blockquotes, quoted checkboxes, and partial heading selections keep markdown intact."""
+        # Standalone blockquote
+        self.editor.setPlainText("> Important quote")
+        cursor = self.editor.textCursor()
+        cursor.setPosition(0)
+        cursor.setPosition(len("> Important quote"), QTextCursor.MoveMode.KeepAnchor)
+        self.editor.setTextCursor(cursor)
+        self.editor._apply_text_color("#0a84ff")
+        self.assertEqual(
+            self.editor.toPlainText(),
+            '> <span style="color: #0a84ff;">Important quote</span>',
+        )
+
+        # Quoted checkbox
+        self.editor.setPlainText("> - [ ] Quoted task")
+        cursor = self.editor.textCursor()
+        cursor.setPosition(3)
+        cursor.setPosition(len("> - [ ] Quoted task"), QTextCursor.MoveMode.KeepAnchor)
+        self.editor.setTextCursor(cursor)
+        self.editor._apply_highlight_color("#ffd60a")
+        self.assertEqual(
+            self.editor.toPlainText(),
+            '> - [ ] <mark style="background-color: #ffd60a;">Quoted task</mark>',
+        )
+
+        # Partial heading selection (starting at second '#')
+        self.editor.setPlainText("### Section Title")
+        cursor = self.editor.textCursor()
+        cursor.setPosition(1)
+        cursor.setPosition(len("### Section Title"), QTextCursor.MoveMode.KeepAnchor)
+        self.editor.setTextCursor(cursor)
+        self.editor._apply_text_color("#ff9f0a")
+        self.assertEqual(
+            self.editor.toPlainText(),
+            '### <span style="color: #ff9f0a;">Section Title</span>',
+        )
+
+    def test_multiline_selection_ending_inside_next_prefix(self) -> None:
+        """Verify multi-line selection ending inside the next line's checkbox prefix leaves it untouched."""
+        content = "- [ ] First task\n- [ ] Second task"
+        self.editor.setPlainText(content)
+        cursor = self.editor.textCursor()
+        cursor.setPosition(2)
+        # End at index 20 (inside '- [ ] ' of second line)
+        cursor.setPosition(20, QTextCursor.MoveMode.KeepAnchor)
+        self.editor.setTextCursor(cursor)
+
+        self.editor._apply_text_color("#30d158")
+        self.assertEqual(
+            self.editor.toPlainText(),
+            '- [ ] <span style="color: #30d158;">First task</span>\n- [ ] Second task',
+        )
+
+    def test_inline_markdown_inside_colored_span_preserves_formatting(self) -> None:
+        """Verify bold text inside a colored span remains bold with hidden asterisks."""
+        text = '- [ ] <span style="color: #ff453a;">**Important** task</span>'
+        self.editor.setPlainText(text)
+        self.editor.highlighter.active_block_number = -1
+        self.editor.highlighter.rehighlight()
+
+        block = self.editor.document().firstBlock()
+        formats = block.layout().formats()
+
+        bold_idx = text.index("Important")
+        ast_idx = text.index("**Important**")
+        task_idx = text.index("task")
+
+        def fmt_at(pos: int):
+            for r in formats:
+                if r.start <= pos < r.start + r.length:
+                    return r.format
+            return None
+
+        ast_fmt = fmt_at(ast_idx)
+        self.assertIsNotNone(ast_fmt)
+        self.assertEqual(ast_fmt.foreground().color().alpha(), 0)
+        self.assertEqual(ast_fmt.fontPointSize(), 1)
+
+        bold_fmt = fmt_at(bold_idx)
+        self.assertIsNotNone(bold_fmt)
+        self.assertGreaterEqual(bold_fmt.fontWeight(), 600)
+        self.assertEqual(bold_fmt.foreground().color().name().lower(), "#ff453a")
+
+        task_fmt = fmt_at(task_idx)
+        self.assertIsNotNone(task_fmt)
+        self.assertEqual(task_fmt.foreground().color().name().lower(), "#ff453a")
+
+    def test_checked_checkbox_dims_both_text_color_and_highlight_background(self) -> None:
+        """Verify checking a colored or highlighted task dims text to #787880 and subdues highlight background."""
+        text = (
+            '- [x] <span style="color: #ff453a;">**Done** colored</span>\n'
+            '- [x] <mark style="background-color: #ffd60a;">Done highlighted</mark>'
+        )
+        self.editor.setPlainText(text)
+        self.editor.highlighter.active_block_number = -1
+        self.editor.highlighter.rehighlight()
+
+        # Line 0: checked colored task with bold
+        b0 = self.editor.document().findBlockByNumber(0)
+        b0_text = b0.text()
+        done_idx = b0_text.index("Done")
+        colored_idx = b0_text.index("colored")
+        for idx in (done_idx, colored_idx):
+            matched = [r.format for r in b0.layout().formats() if r.start <= idx < r.start + r.length]
+            self.assertTrue(matched)
+            self.assertEqual(matched[0].foreground().color().name().lower(), "#787880")
+
+        # Line 1: checked highlighted task
+        b1 = self.editor.document().findBlockByNumber(1)
+        b1_text = b1.text()
+        hl_idx = b1_text.index("Done highlighted")
+        matched_hl = [r.format for r in b1.layout().formats() if r.start <= hl_idx < r.start + r.length]
+        self.assertTrue(matched_hl)
+        self.assertEqual(matched_hl[0].foreground().color().name().lower(), "#787880")
+        self.assertLess(matched_hl[0].background().color().alpha(), 100)
+
 
 if __name__ == "__main__":
     unittest.main()

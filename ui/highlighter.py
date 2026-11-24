@@ -405,6 +405,74 @@ class MarkdownHighlighter(QSyntaxHighlighter):
                 changed_blocks.add(k)
         return changed_blocks
 
+    def _merge_color_range(
+        self,
+        text: str,
+        py_start: int,
+        py_len: int,
+        fg: Optional[QColor] = None,
+        bg: Optional[QColor] = None,
+        font_size: Optional[int] = None,
+        is_checked: bool = False,
+        dim_color: Optional[QColor] = None,
+    ) -> None:
+        """Merge foreground or background color onto existing runs without breaking inline markdown."""
+        if py_len <= 0:
+            return
+        if text.isascii():
+            u16_start = py_start
+            u16_count = py_len
+        else:
+            u16_start = len(text[:py_start].encode("utf-16-le")) // 2 if py_start > 0 else 0
+            u16_count = len(text[py_start : py_start + py_len].encode("utf-16-le")) // 2
+        if u16_count <= 0:
+            return
+
+        u16_end = u16_start + u16_count
+        pos = u16_start
+        while pos < u16_end:
+            existing = self.format(pos)
+            run_end = pos + 1
+            while run_end < u16_end and self.format(run_end) == existing:
+                run_end += 1
+
+            # Never overwrite hidden syntax tags or visible markdown delimiters
+            is_hidden = (
+                existing.fontPointSize() == 1
+                and existing.foreground().color().alpha() == 0
+            )
+            is_marker = existing == self.marker_format
+            if not is_hidden and not is_marker:
+                fmt = QTextCharFormat(existing)
+                if bg is not None and bg.isValid():
+                    if is_checked:
+                        dull_bg = QColor(bg.red(), bg.green(), bg.blue(), 55)
+                        fmt.setBackground(dull_bg)
+                        if dim_color is not None:
+                            fmt.setForeground(dim_color)
+                    else:
+                        fmt.setBackground(bg)
+                        existing_fg = existing.foreground().color()
+                        is_default_fg = (
+                            not existing.foreground().isOpaque()
+                            or existing_fg.name().lower() in ("#ffffff", "#dcdcdc")
+                        )
+                        if is_default_fg:
+                            if bg.lightness() < 128:
+                                fmt.setForeground(QColor("#ffffff"))
+                            else:
+                                fmt.setForeground(QColor("#111111"))
+                if fg is not None and fg.isValid():
+                    if is_checked and dim_color is not None:
+                        fmt.setForeground(dim_color)
+                    else:
+                        fmt.setForeground(fg)
+                if font_size:
+                    fmt.setFontPointSize(font_size)
+                self.setFormat(pos, run_end - pos, fmt)
+
+            pos = run_end
+
     def _format(self, text: str, py_start: int, py_len: int, fmt: QTextCharFormat) -> None:
         """Call self.setFormat converting Python char indices to Qt UTF-16 offsets."""
         if text.isascii():
@@ -746,22 +814,16 @@ class MarkdownHighlighter(QSyntaxHighlighter):
                 custom_bg = m.group(2)
                 g3_s, g3_e = m.span(3)
                 g4_s, g4_e = m.span(4)
-                u16_start = len(text[:g3_s].encode("utf-16-le")) // 2 if g3_s > 0 else 0
-                existing = self.format(u16_start)
-                fmt = QTextCharFormat(existing)
                 bg_color = QColor(custom_bg) if custom_bg else self.mark_format.background().color()
-                if bg_color.isValid():
-                    fmt.setBackground(bg_color)
-                    if not existing.foreground().isOpaque():
-                        if bg_color.lightness() < 128:
-                            fmt.setForeground(QColor("#ffffff"))
-                        else:
-                            fmt.setForeground(QColor("#111111"))
-                if base_point_size:
-                    fmt.setFontPointSize(base_point_size)
-                if is_checked:
-                    fmt.setForeground(dim_color)
-                self._format(text, g3_s, g3_e - g3_s, fmt)
+                self._merge_color_range(
+                    text,
+                    g3_s,
+                    g3_e - g3_s,
+                    bg=bg_color if bg_color.isValid() else None,
+                    font_size=base_point_size,
+                    is_checked=is_checked,
+                    dim_color=dim_color,
+                )
                 self._format(text, g1_s, g1_e - g1_s, self.hidden_format)
                 self._format(text, g4_s, g4_e - g4_s, self.hidden_format)
 
@@ -770,15 +832,16 @@ class MarkdownHighlighter(QSyntaxHighlighter):
                 color_hex = m.group(2)
                 g3_s, g3_e = m.span(3)
                 g4_s, g4_e = m.span(4)
-                u16_start = len(text[:g3_s].encode("utf-16-le")) // 2 if g3_s > 0 else 0
-                existing = self.format(u16_start)
-                fmt = QTextCharFormat(existing)
                 c = QColor(color_hex)
-                if c.isValid():
-                    fmt.setForeground(c if not is_checked else dim_color)
-                if base_point_size:
-                    fmt.setFontPointSize(base_point_size)
-                self._format(text, g3_s, g3_e - g3_s, fmt)
+                self._merge_color_range(
+                    text,
+                    g3_s,
+                    g3_e - g3_s,
+                    fg=c if c.isValid() else None,
+                    font_size=base_point_size,
+                    is_checked=is_checked,
+                    dim_color=dim_color,
+                )
                 self._format(text, g1_s, g1_e - g1_s, self.hidden_format)
                 self._format(text, g4_s, g4_e - g4_s, self.hidden_format)
 

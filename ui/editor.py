@@ -105,6 +105,7 @@ from utils.markdown import (
     get_checkbox_info,
     is_checkbox_line,
     transform_line_block_prefix,
+    trim_selection_past_structural_prefixes,
 )
 from utils.math_engine import (
     INLINE_MATH_RE,
@@ -657,18 +658,27 @@ class MarkdownEditor(QTextEdit):
             return
 
         cursor = self.textCursor()
+        start = cursor.selectionStart()
+        end = cursor.selectionEnd()
+        doc_text = self.document().toPlainText()
+        trimmed = trim_selection_past_structural_prefixes(doc_text, start, end)
+        if trimmed is None:
+            return
+        if trimmed != (start, end):
+            start, end = trimmed
+            cursor.setPosition(start)
+            cursor.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
+            self.setTextCursor(cursor)
+
         text = cursor.selectedText()
         if not text:
             return
-
-        start = cursor.selectionStart()
-        end = cursor.selectionEnd()
 
         cursor.beginEditBlock()
 
         # Intelligently protect structural prefixes (- [ ] , - [x] , - , 1. , > , # )
         struct_match = re.match(
-            r"^(\s*(?:>+\s*)*(?:[-*+]\s*\[[ xX]?\]\s*|[-*+]\s+|\d+\.\s+|#{1,6}\s+))(.*)$",
+            r"^(\s*(?:>+[ \t]*)+(?:[-*+]\s*\[[ xX]?\][ \t]*|[-*+][ \t]+|\d+[\.\)][ \t]+|#{1,6}[ \t]+)?|\s*(?:[-*+]\s*\[[ xX]?\][ \t]*|[-*+][ \t]+|\d+[\.\)][ \t]+|#{1,6}[ \t]+))(.*)$",
             text,
         )
         lead_prefix = struct_match.group(1) if struct_match else ""
@@ -725,12 +735,17 @@ class MarkdownEditor(QTextEdit):
         if not cursor.hasSelection():
             return
 
-        start = cursor.selectionStart()
-        end = cursor.selectionEnd()
+        orig_start = cursor.selectionStart()
+        orig_end = cursor.selectionEnd()
 
         doc_text = self.document().toPlainText()
+        trimmed = trim_selection_past_structural_prefixes(doc_text, orig_start, orig_end)
+        if trimmed is None:
+            return
+        start, end = trimmed
+
         new_start, new_end = expand_selection_to_color_tags(doc_text, start, end, "span")
-        if (new_start, new_end) != (start, end):
+        if (new_start, new_end) != (orig_start, orig_end):
             cursor.setPosition(new_start)
             cursor.setPosition(new_end, QTextCursor.MoveMode.KeepAnchor)
             self.setTextCursor(cursor)
@@ -759,12 +774,17 @@ class MarkdownEditor(QTextEdit):
         if not cursor.hasSelection():
             return
 
-        start = cursor.selectionStart()
-        end = cursor.selectionEnd()
+        orig_start = cursor.selectionStart()
+        orig_end = cursor.selectionEnd()
 
         doc_text = self.document().toPlainText()
+        trimmed = trim_selection_past_structural_prefixes(doc_text, orig_start, orig_end)
+        if trimmed is None:
+            return
+        start, end = trimmed
+
         new_start, new_end = expand_selection_to_color_tags(doc_text, start, end, "mark")
-        if (new_start, new_end) != (start, end):
+        if (new_start, new_end) != (orig_start, orig_end):
             cursor.setPosition(new_start)
             cursor.setPosition(new_end, QTextCursor.MoveMode.KeepAnchor)
             self.setTextCursor(cursor)

@@ -204,8 +204,57 @@ def transform_line_block_prefix(line_text: str, new_prefix: str) -> str:
 
 
 STRUCTURAL_PREFIX_PATTERN = re.compile(
-    r"^(\s*(?:>+\s*)*(?:[-*+]\s*\[[ xX]?\]\s*|[-*+]\s+|\d+[\.\)]\s+|#{1,6}\s+))(.*)$"
+    r"^(\s*(?:>+[ \t]*)+(?:[-*+]\s*\[[ xX]?\][ \t]*|[-*+][ \t]+|\d+[\.\)][ \t]+|#{1,6}[ \t]+)?|\s*(?:[-*+]\s*\[[ xX]?\][ \t]*|[-*+][ \t]+|\d+[\.\)][ \t]+|#{1,6}[ \t]+))(.*)$"
 )
+
+
+def trim_selection_past_structural_prefixes(
+    doc_text: str,
+    start: int,
+    end: int,
+) -> Optional[Tuple[int, int]]:
+    """Trim selection bounds so structural markdown prefixes are never partially or fully wrapped.
+
+    Returns adjusted (start, end) or None if the selection covers only structural prefix characters.
+    """
+    if start >= end or start < 0 or end > len(doc_text):
+        return None
+
+    new_start = start
+    new_end = end
+
+    # 1. Inspect the starting line and push start past its structural prefix if needed
+    start_line_pos = doc_text.rfind("\n", 0, new_start) + 1
+    start_line_end = doc_text.find("\n", start_line_pos)
+    if start_line_end == -1:
+        start_line_end = len(doc_text)
+
+    start_line = doc_text[start_line_pos:start_line_end]
+    m_start = STRUCTURAL_PREFIX_PATTERN.match(start_line)
+    if m_start:
+        prefix_end = start_line_pos + len(m_start.group(1))
+        if new_start < prefix_end:
+            if new_end <= prefix_end:
+                return None
+            new_start = prefix_end
+
+    # 2. If selection spans multiple lines and ends inside the last line's prefix, trim end back
+    if new_end > start_line_end:
+        end_line_pos = doc_text.rfind("\n", 0, new_end) + 1
+        if end_line_pos > start_line_pos and new_end > end_line_pos:
+            end_line_end = doc_text.find("\n", end_line_pos)
+            if end_line_end == -1:
+                end_line_end = len(doc_text)
+            end_line = doc_text[end_line_pos:end_line_end]
+            m_end = STRUCTURAL_PREFIX_PATTERN.match(end_line)
+            if m_end:
+                end_prefix_end = end_line_pos + len(m_end.group(1))
+                if new_end <= end_prefix_end:
+                    new_end = end_line_pos - 1
+
+    if new_start >= new_end:
+        return None
+    return new_start, new_end
 
 SPAN_COLOR_TAG_PATTERN = re.compile(
     r"^<{0,1}span\s+style=[\"']color:\s*([#a-zA-Z0-9]+);?[\"']>(.*?)</{0,1}span>$",
@@ -270,8 +319,8 @@ def _format_single_line_text_color(line: str, color: str) -> str:
         flags=re.IGNORECASE,
     )
 
-    if not color:
-        # Default / Reset: return clean text without color tags
+    if not color or not cleaned_core.strip():
+        # Default / Reset or prefix-only line: return clean text without color tags
         formatted_core = cleaned_core
     else:
         # Check if the selection was already uniformly colored with the exact same color -> toggle off
@@ -318,8 +367,8 @@ def _format_single_line_highlight_color(line: str, color: str) -> str:
         flags=re.IGNORECASE,
     )
 
-    if not color:
-        # None / Reset: return clean text without highlight tags
+    if not color or not cleaned_core.strip():
+        # None / Reset or prefix-only line: return clean text without highlight tags
         formatted_core = cleaned_core
     else:
         # Check if the selection was already uniformly highlighted with the exact same color -> toggle off
