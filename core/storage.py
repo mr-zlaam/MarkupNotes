@@ -7,7 +7,7 @@ import tempfile
 from typing import List, Optional
 
 from core.note import Note
-from utils.paths import get_default_notes_dir
+from utils.paths import get_default_notes_dir, prune_nested_paths
 from utils.sorting import DEFAULT_SORT_ORDER, sort_folders, sort_notes
 
 
@@ -229,9 +229,9 @@ class StorageManager:
         return deleted_count
 
     def delete_folders_batch(self, paths: List[Path]) -> int:
-        """Delete multiple folders in batch, moving each to .trash. Returns count of deleted folders."""
+        """Delete multiple folders in batch, moving top-most trees intact to .trash."""
         deleted_count = 0
-        for path in paths:
+        for path in prune_nested_paths(paths):
             if self.delete_folder(path):
                 deleted_count += 1
         return deleted_count

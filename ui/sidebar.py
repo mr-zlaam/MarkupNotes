@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
 from ui.context_menu import ModernContextMenu
 from ui.dialogs import ModernColorDialog, ModernInputDialog
 from utils.file_validator import MAX_FOLDER_NAME_LENGTH, validate_folder_name
+from utils.paths import collect_ancestors_in_set, collect_folder_and_descendants
 from utils.sorting import DEFAULT_SORT_ORDER, normalize_sort_order, sort_folders
 from utils.icons import (
     PRESET_COLORS,
@@ -93,6 +94,7 @@ class FolderSidebar(QWidget):
         self._sort_order: str = DEFAULT_SORT_ORDER
         self._is_selection_mode: bool = False
         self._selected_folders: Set[Path] = set()
+        self._pre_selection_folder: Optional[Path] = None
         self._folder_colors: Dict[str, str] = {}
         self._init_ui()
 
@@ -266,19 +268,36 @@ class FolderSidebar(QWidget):
         layout.addWidget(self.tree_widget, 1)
 
     def enter_selection_mode(self, initial_folder: Optional[Path] = None) -> None:
-        """Enter folder selection mode."""
+        """Enter folder selection mode, auto-selecting any nested children of initial_folder."""
+        if not self._is_selection_mode:
+            current_item = self.tree_widget.currentItem()
+            self._pre_selection_folder = (
+                current_item.data(0, Qt.ItemDataRole.UserRole)
+                if current_item is not None
+                else None
+            )
         self._is_selection_mode = True
-        self._selected_folders = {initial_folder} if initial_folder else set()
+        if initial_folder is not None:
+            self._selected_folders = collect_folder_and_descendants(
+                initial_folder, self._folders
+            )
+        else:
+            self._selected_folders = set()
         self.header_stack.setCurrentIndex(1)
         self._update_folder_items()
         self._update_batch_bar()
 
     def exit_selection_mode(self) -> None:
-        """Exit folder selection mode and return to normal view."""
+        """Exit folder selection mode and restore the previously focused folder."""
         self._is_selection_mode = False
         self._selected_folders.clear()
         self.header_stack.setCurrentIndex(0)
-        self._update_folder_items()
+        restored = (
+            self._pre_selection_folder
+            if self._pre_selection_folder in self._folders
+            else None
+        )
+        self._update_folder_items(current_selection=restored)
 
     def _update_batch_bar(self) -> None:
         """Update counter and button states in folder selection header."""
@@ -394,16 +413,18 @@ class FolderSidebar(QWidget):
                 # 'All Notes' cannot be selected for folder deletion
                 return
             if folder in self._selected_folders:
-                self._selected_folders.remove(folder)
+                self._selected_folders -= collect_folder_and_descendants(folder, self._folders)
+                self._selected_folders -= collect_ancestors_in_set(folder, self._selected_folders)
             else:
-                self._selected_folders.add(folder)
+                self._selected_folders |= collect_folder_and_descendants(folder, self._folders)
             self._update_folder_items()
             self._update_batch_bar()
             return
 
         folder = item.data(0, Qt.ItemDataRole.UserRole)
         if folder is None:
-            # 'All Notes' pinned root
+            # 'All Notes' pinned root: always ensure All Notes view is activated
+            self.folder_selected.emit(None)
             return
 
         folder_color = self._folder_colors.get(folder.name) or "#e5a93c"

@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+from typing import Iterable, List, Set
 
 
 def get_default_notes_dir() -> Path:
@@ -70,3 +71,28 @@ def get_config_dir() -> Path:
             return fallback
         except OSError:
             return config_dir
+
+
+def collect_folder_and_descendants(folder: Path, all_folders: Iterable[Path]) -> Set[Path]:
+    """Return folder plus all nested descendant folders present in all_folders."""
+    result: Set[Path] = {folder}
+    for candidate in all_folders:
+        if candidate == folder or folder in candidate.parents:
+            result.add(candidate)
+    return result
+
+
+def collect_ancestors_in_set(folder: Path, selected: Iterable[Path]) -> Set[Path]:
+    """Return any folder in selected that is a strict ancestor of folder."""
+    return {candidate for candidate in selected if candidate in folder.parents}
+
+
+def prune_nested_paths(paths: Iterable[Path]) -> List[Path]:
+    """Return deduplicated top-most paths, dropping descendants covered by a selected ancestor."""
+    unique_paths: List[Path] = []
+    seen: Set[Path] = set()
+    for p in paths:
+        if p not in seen:
+            seen.add(p)
+            unique_paths.append(p)
+    return [p for p in unique_paths if not any(anc in seen for anc in p.parents)]
