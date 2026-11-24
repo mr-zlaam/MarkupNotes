@@ -4216,6 +4216,7 @@ class EditorPanel(QWidget):
         self._active_cached_path: Optional[Path] = None
         self._load_generation_id: int = 0
         self._pending_load_note: Optional[Note] = None
+        self._deferred_large_note: Optional[Note] = None
         self._pending_restore_state: Optional[Tuple[Path, int, int]] = None
         self._is_loading_note: bool = False
         self._load_pool = QThreadPool()
@@ -4349,6 +4350,66 @@ class EditorPanel(QWidget):
         self._loading_overlay = _LoadingSpinnerOverlay(parent=self)
         self._loading_overlay.setVisible(False)
 
+        # Startup safeguard overlay for very large notes (>= 2 MB) to prevent slow launch loops
+        self._deferred_overlay = QWidget(parent=self)
+        self._deferred_overlay.setObjectName("DeferredLargeNoteCard")
+        self._deferred_overlay.setStyleSheet("""
+            QWidget#DeferredLargeNoteCard {
+                background-color: rgba(32, 32, 36, 240);
+                border: 1px solid #3a3a40;
+                border-radius: 12px;
+            }
+            QLabel#DeferredTitle {
+                color: #f5f5f7;
+                font-size: 13px;
+                font-weight: 600;
+                background: transparent;
+                border: none;
+            }
+            QLabel#DeferredSub {
+                color: #8e8e93;
+                font-size: 11px;
+                background: transparent;
+                border: none;
+            }
+            QPushButton#DeferredLoadBtn {
+                background-color: #0a84ff;
+                color: #ffffff;
+                border: none;
+                border-radius: 6px;
+                padding: 6px 16px;
+                font-size: 12px;
+                font-weight: 600;
+            }
+            QPushButton#DeferredLoadBtn:hover {
+                background-color: #2194ff;
+            }
+        """)
+        def_layout = QVBoxLayout(self._deferred_overlay)
+        def_layout.setContentsMargins(22, 18, 22, 18)
+        def_layout.setSpacing(8)
+        self._deferred_title_label = QLabel("Large note skipped on startup", parent=self._deferred_overlay)
+        self._deferred_title_label.setObjectName("DeferredTitle")
+        self._deferred_title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        def_layout.addWidget(self._deferred_title_label)
+
+        self._deferred_sub_label = QLabel(
+            "Skipped auto-loading to keep startup fast.",
+            parent=self._deferred_overlay,
+        )
+        self._deferred_sub_label.setObjectName("DeferredSub")
+        self._deferred_sub_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        def_layout.addWidget(self._deferred_sub_label)
+
+        self._deferred_load_btn = QPushButton("Load File", parent=self._deferred_overlay)
+        self._deferred_load_btn.setObjectName("DeferredLoadBtn")
+        self._deferred_load_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._deferred_load_btn.clicked.connect(self._on_load_deferred_note_clicked)
+        def_layout.addWidget(self._deferred_load_btn, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        self._deferred_overlay.adjustSize()
+        self._deferred_overlay.setVisible(False)
+
         layout.addWidget(self.editor)
 
     def resizeEvent(self, event: QResizeEvent) -> None:
@@ -4358,6 +4419,59 @@ class EditorPanel(QWidget):
             self._update_find_bar_geometry()
         if hasattr(self, "_loading_overlay") and self._loading_overlay.isVisible():
             self._position_loading_overlay()
+        if hasattr(self, "_deferred_overlay") and self._deferred_overlay.isVisible():
+            self._position_deferred_overlay()
+
+    def _position_deferred_overlay(self) -> None:
+        """Center the startup large-note prompt card inside the editor panel."""
+        self._deferred_overlay.adjustSize()
+        ow = self._deferred_overlay.width()
+        oh = self._deferred_overlay.height()
+        x = max(16, (self.width() - ow) // 2)
+        y = max(60, (self.height() - oh) // 2)
+        self._deferred_overlay.move(x, y)
+        self._deferred_overlay.raise_()
+
+    def show_deferred_large_note(self, note: Note) -> None:
+        """Show an instant startup safeguard card instead of auto-loading a huge note."""
+        self._load_generation_id += 1
+        self._current_note = note
+        self._deferred_large_note = note
+        self._pending_load_note = None
+        self._is_loading_note = False
+        self._loading_overlay.hide()
+        self._save_timer.stop()
+        self._word_count_timer.stop()
+        if self._title_timer.isActive():
+            self._title_timer.stop()
+
+        self.export_btn.setEnabled(False)
+        self.title_edit.blockSignals(True)
+        self.title_edit.setText(note.title)
+        self.title_edit.setEnabled(False)
+        self.title_edit.blockSignals(False)
+
+        self.editor.blockSignals(True)
+        doc, hl, undo_mgr = self.editor.create_fresh_document()
+        self.editor.attach_document_state(doc, hl, undo_mgr)
+        self.editor.setPlainText("")
+        self.editor.setReadOnly(True)
+        self.editor._note_dir = note.path.parent
+        self.editor.blockSignals(False)
+
+        self.meta_label.setText("Large note skipped on startup")
+        self.word_count_label.setText("")
+        self._deferred_title_label.setText(f"'{note.title}' was not auto-loaded")
+        self._position_deferred_overlay()
+        self._deferred_overlay.show()
+
+    def _on_load_deferred_note_clicked(self) -> None:
+        """Load the deferred large note on demand when the user clicks Load File."""
+        note = self._deferred_large_note
+        self._deferred_large_note = None
+        self._deferred_overlay.hide()
+        if note is not None and note.path.exists():
+            self.load_note(note)
 
     def _position_loading_overlay(self) -> None:
         """Center the large-note loading pill inside the editor panel."""
@@ -4803,6 +4917,8 @@ class EditorPanel(QWidget):
         self._save_active_viewport_state()
 
         self._current_note = note
+        self._deferred_large_note = None
+        self._deferred_overlay.hide()
         self.editor._note_dir = note.path.parent if note is not None else self.editor._vault_root
         self._pending_load_note = None
         self._is_loading_note = False

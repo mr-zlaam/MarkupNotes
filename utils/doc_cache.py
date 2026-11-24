@@ -15,6 +15,7 @@ from utils.note_io import read_note_full
 from utils.undo_manager import PlainTextUndoManager
 
 LARGE_NOTE_LOADER_BYTES: int = 500 * 1024
+STARTUP_DEFER_LOAD_BYTES: int = 2 * 1024 * 1024
 DEFAULT_MAX_CACHE_ENTRIES: int = 6
 DEFAULT_MAX_CACHE_BYTES: int = 32 * 1024 * 1024
 

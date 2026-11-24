@@ -19,6 +19,7 @@ from ui.dialogs import ModernConfirmDialog, ModernInputDialog, ModernMessageDial
 from ui.editor import EditorPanel
 from ui.note_list import NoteListPanel
 from ui.sidebar import FolderSidebar
+from utils.doc_cache import STARTUP_DEFER_LOAD_BYTES, get_file_stat_signature
 from utils.file_validator import MAX_FOLDER_NAME_LENGTH, validate_folder_name, validate_markdown_file
 from utils.note_io import AsyncSaveQueue, note_matches_query
 from utils.paths import (
@@ -642,16 +643,28 @@ class MainWindow(QMainWindow):
             self.sidebar.set_folders(folders, current_selection=restored_folder, sort_order=sort_order)
             self._update_watcher_paths()
 
+            defer_large_startup_note = False
             if restored_note is not None:
                 self.editor.set_pending_restore_state(restored_note, restored_cursor, restored_scroll)
+                stat_sig = get_file_stat_signature(restored_note)
+                if stat_sig is not None and stat_sig[1] >= STARTUP_DEFER_LOAD_BYTES:
+                    defer_large_startup_note = True
 
             self._refresh_notes(
                 preserve_path=str(restored_note) if restored_note is not None else None,
-                emit_selection=True,
+                emit_selection=not defer_large_startup_note,
             )
 
+            if defer_large_startup_note and restored_note is not None:
+                deferred_note = next(
+                    (n for n in self._all_current_notes if n.path == restored_note),
+                    None,
+                ) or Note.from_file(restored_note)
+                if deferred_note is not None:
+                    self._current_note = deferred_note
+                    self.editor.show_deferred_large_note(deferred_note)
             # Auto-create an initial note only on a brand-new empty workspace
-            if not self._all_current_notes and restored_folder is None and not folders:
+            elif not self._all_current_notes and restored_folder is None and not folders:
                 self._on_create_note()
             elif self._current_note is not None:
                 self.editor.editor.setFocus()

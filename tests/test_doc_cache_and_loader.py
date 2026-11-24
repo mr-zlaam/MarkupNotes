@@ -211,6 +211,50 @@ class TestDocCacheAndLoader(unittest.TestCase):
         self.assertFalse(self.panel._is_loading_note)
         self.assertIs(self.panel.editor.document(), big_doc)
 
+    def test_startup_defers_very_large_last_open_note_and_loads_on_demand(self) -> None:
+        """Startup skips auto-loading >= 2 MB last_note, shows Load File prompt, and loads when clicked."""
+        from core.config import ConfigManager
+        from core.storage import StorageManager
+        from ui.main_window import MainWindow
+        from utils.doc_cache import STARTUP_DEFER_LOAD_BYTES
+
+        vault = self.root / "startup_vault"
+        vault.mkdir()
+        huge_file = vault / "GiantNovel.md"
+        small_file = vault / "Quick.md"
+        huge_text = ("A long paragraph for testing startup safeguard.\n" * 45_000)
+        self.assertGreaterEqual(len(huge_text.encode("utf-8")), STARTUP_DEFER_LOAD_BYTES)
+        huge_file.write_text(huge_text, encoding="utf-8")
+        small_file.write_text("# Quick Note", encoding="utf-8")
+
+        cfg_file = self.root / "startup_settings.json"
+        cfg = ConfigManager(config_file=cfg_file)
+        cfg.settings.general.startup_action = "last_note"
+        cfg.settings.session.last_note = "GiantNovel.md"
+        cfg.save()
+
+        win = MainWindow(
+            storage_manager=StorageManager(vault),
+            config_manager=ConfigManager(config_file=cfg_file),
+        )
+        try:
+            # Startup MUST NOT auto-load the huge note into the editor
+            self.assertIsNotNone(win.editor._deferred_large_note)
+            self.assertEqual(win.editor._deferred_large_note.path, huge_file)
+            self.assertFalse(win.editor._is_loading_note)
+            self.assertEqual(win.editor.get_content(), "")
+            self.assertTrue(win.editor._deferred_overlay.isVisibleTo(win.editor))
+
+            # Clicking "Load File" starts loading the deferred note on demand
+            win.editor._deferred_load_btn.click()
+            done = _wait_until(self.app, lambda: not win.editor._is_loading_note, timeout_sec=10.0)
+            self.assertTrue(done)
+            self.assertIsNone(win.editor._deferred_large_note)
+            self.assertEqual(len(win.editor.get_content()), len(huge_text))
+        finally:
+            win.close()
+            win.deleteLater()
+
 
 if __name__ == "__main__":
     unittest.main()
