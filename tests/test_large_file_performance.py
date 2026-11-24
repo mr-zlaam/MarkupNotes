@@ -168,8 +168,12 @@ class TestLargeFilePhase1Performance(unittest.TestCase):
             )
             self.assertTrue(editor.toPlainText().endswith("prose.hello"))
 
-            # Undo must cleanly revert the fast-delta typed word
-            editor.undo()
+            # Undo must cleanly revert the fast-delta typed word without full region rescans
+            with patch.object(
+                editor.highlighter, "refresh_regions", wraps=editor.highlighter.refresh_regions
+            ) as spy_undo_refresh:
+                editor.undo()
+                spy_undo_refresh.assert_not_called()
             self.assertTrue(editor.toPlainText().endswith("prose."))
 
             # Typing a region syntax char ('|') must schedule deferred region scan

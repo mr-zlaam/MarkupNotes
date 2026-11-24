@@ -1608,9 +1608,9 @@ class MarkdownEditor(QTextEdit):
         self._pending_text_mutation = False
         self._pending_changes = []
 
-        if self._updating_margins or self._resetting_text:
+        if self._updating_margins or self._resetting_text or self._applying_undo_redo:
             return
-        if not had_text_mutation and not self._applying_undo_redo:
+        if not had_text_mutation:
             return
 
         doc = self.document()
