@@ -96,3 +96,62 @@ def prune_nested_paths(paths: Iterable[Path]) -> List[Path]:
             seen.add(p)
             unique_paths.append(p)
     return [p for p in unique_paths if not any(anc in seen for anc in p.parents)]
+
+
+def resolve_copy_target_path(target_dir: Path, source_name: str, is_dir: bool) -> Path:
+    """Return a non-colliding destination path using 'copy', 'copy1', 'copy2', ... suffixes."""
+    candidate = target_dir / source_name
+    if not candidate.exists():
+        return candidate
+
+    if is_dir:
+        stem = source_name
+        suffix = ""
+    else:
+        p = Path(source_name)
+        stem = p.stem
+        suffix = p.suffix
+
+    first_copy = target_dir / f"{stem} copy{suffix}"
+    if not first_copy.exists():
+        return first_copy
+
+    counter = 1
+    while True:
+        numbered = target_dir / f"{stem} copy{counter}{suffix}"
+        if not numbered.exists():
+            return numbered
+        counter += 1
+
+
+def is_invalid_folder_transfer(src_folder: Path, dst_dir: Path) -> bool:
+    """Return True if dst_dir is src_folder itself or a nested descendant of src_folder."""
+    try:
+        src_res = src_folder.resolve()
+        dst_res = dst_dir.resolve()
+    except OSError:
+        src_res = src_folder
+        dst_res = dst_dir
+    return dst_res == src_res or src_res in dst_res.parents
+
+
+def folder_contains_pinned_items(
+    folder: Path,
+    pinned_notes: Iterable[str],
+    pinned_folders: Iterable[str],
+    root_dir: Path,
+) -> bool:
+    """Return True if folder itself is pinned or contains any pinned note or subfolder."""
+    try:
+        rel_folder = folder.resolve().relative_to(root_dir.resolve()).as_posix()
+    except (ValueError, OSError):
+        rel_folder = folder.as_posix()
+
+    prefix = f"{rel_folder}/"
+    for key in pinned_folders:
+        if key == rel_folder or key.startswith(prefix):
+            return True
+    for key in pinned_notes:
+        if key.startswith(prefix):
+            return True
+    return False

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
-from PyQt6.QtCore import QEvent, QModelIndex, QObject, QPoint, QRect, QRectF, QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen
+from PyQt6.QtCore import QEvent, QMimeData, QModelIndex, QObject, QPoint, QRect, QRectF, QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QDrag, QFont, QFontMetrics, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import (
+    QAbstractItemView,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -33,11 +35,14 @@ from utils.icons import (
     create_checkbox_icon,
     create_close_icon,
     create_color_circle_icon,
+    create_copy_icon,
+    create_cut_icon,
     create_done_icon,
     create_edit_icon,
     create_folder_icon,
     create_markdown_icon,
     create_notes_toggle_icon,
+    create_paste_icon,
     create_pin_icon,
     create_plus_icon,
     create_search_icon,
@@ -45,6 +50,39 @@ from utils.icons import (
     create_trash_icon,
     create_uncheck_icon,
 )
+
+MIME_WORKSPACE_ITEM = "application/x-markup-notes-item"
+
+
+class _DraggableNoteListWidget(QListWidget):
+    """QListWidget supporting drag-out of note cards into folders without mutating internal order."""
+
+    def __init__(self, panel: "NoteListPanel") -> None:
+        super().__init__(parent=panel)
+        self._panel = panel
+        self.setDragEnabled(True)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.DragOnly)
+
+    def startDrag(self, supportedActions: Qt.DropAction) -> None:
+        if self._panel.is_selection_mode:
+            return
+        item = self.currentItem()
+        if item is None:
+            return
+        note: Optional[Note] = item.data(Qt.ItemDataRole.UserRole)
+        if note is None:
+            return
+
+        mime = QMimeData()
+        payload = json.dumps({"kind": "note", "path": str(note.path)}).encode("utf-8")
+        mime.setData(MIME_WORKSPACE_ITEM, payload)
+
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+        drag.exec(
+            Qt.DropAction.MoveAction | Qt.DropAction.CopyAction,
+            Qt.DropAction.MoveAction,
+        )
 
 
 class NoteCardDelegate(QStyledItemDelegate):
@@ -73,6 +111,9 @@ class NoteCardDelegate(QStyledItemDelegate):
         if note is None:
             painter.restore()
             return
+
+        if self.panel._cut_path is not None and note.path == self.panel._cut_path:
+            painter.setOpacity(0.5)
 
         is_selected = bool(option.state & QStyle.StateFlag.State_Selected) and not self.panel.is_selection_mode
         is_hover = bool(option.state & QStyle.StateFlag.State_MouseOver)
@@ -221,6 +262,11 @@ class NoteListPanel(QWidget):
     selection_mode_changed = pyqtSignal(bool)
     note_color_changed = pyqtSignal(object, object)  # Emits (Note, hex_color_or_None)
     pin_note_requested = pyqtSignal(object)  # Emits Note instance
+    cut_note_requested = pyqtSignal(object)  # Emits Note instance
+    copy_note_requested = pyqtSignal(object)  # Emits Note instance
+    paste_requested = pyqtSignal()
+    undo_file_op_requested = pyqtSignal()
+    cancel_clipboard_requested = pyqtSignal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent=parent)
@@ -231,7 +277,17 @@ class NoteListPanel(QWidget):
         self._is_selection_mode: bool = False
         self._selected_paths: Set[str] = set()
         self._note_colors: Dict[str, str] = {}
+        self._has_clipboard: bool = False
+        self._cut_path: Optional[Path] = None
         self._init_ui()
+
+    def set_clipboard_state(
+        self, has_clipboard: bool, cut_path: Optional[Path] = None
+    ) -> None:
+        """Update visual cut dimming and Paste menu availability."""
+        self._has_clipboard = bool(has_clipboard)
+        self._cut_path = cut_path
+        self.list_widget.viewport().update()
 
     def set_path_context(self, notes_root: Optional[Path], show_relative_path: bool) -> None:
         """Configure whether cards display subfolder relative paths (used in All Notes view)."""
@@ -398,7 +454,7 @@ class NoteListPanel(QWidget):
         layout.addWidget(self.header_stack, 0)
 
         # 3. Note Cards List
-        self.list_widget = QListWidget(parent=self)
+        self.list_widget = _DraggableNoteListWidget(self)
         self.list_widget.setObjectName("NoteCardsList")
         self.list_widget.setItemDelegate(NoteCardDelegate(self))
         self.list_widget.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -501,6 +557,38 @@ class NoteListPanel(QWidget):
                         if note is not None:
                             self.rename_note_requested.emit(note)
                             return True
+            if not self._is_selection_mode:
+                mods = key_event.modifiers()
+                ctrl_only = bool(mods & Qt.KeyboardModifier.ControlModifier) and not bool(
+                    mods
+                    & (
+                        Qt.KeyboardModifier.AltModifier
+                        | Qt.KeyboardModifier.MetaModifier
+                        | Qt.KeyboardModifier.ShiftModifier
+                    )
+                )
+                if ctrl_only:
+                    current_item = self.list_widget.currentItem()
+                    note = (
+                        current_item.data(Qt.ItemDataRole.UserRole)
+                        if current_item is not None
+                        else None
+                    )
+                    if key_event.key() == Qt.Key.Key_X and note is not None:
+                        self.cut_note_requested.emit(note)
+                        return True
+                    if key_event.key() == Qt.Key.Key_C and note is not None:
+                        self.copy_note_requested.emit(note)
+                        return True
+                    if key_event.key() == Qt.Key.Key_V and self._has_clipboard:
+                        self.paste_requested.emit()
+                        return True
+                    if key_event.key() == Qt.Key.Key_Z:
+                        self.undo_file_op_requested.emit()
+                        return True
+                if key_event.key() == Qt.Key.Key_Escape and self._cut_path is not None:
+                    self.cancel_clipboard_requested.emit()
+                    return True
             if key_event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
                 if self._is_selection_mode:
                     if self._selected_paths:
@@ -531,11 +619,16 @@ class NoteListPanel(QWidget):
             if not self._is_selection_mode:
                 menu = ModernContextMenu(self)
                 new_note_act = menu.addAction(create_plus_icon("#8e8e93", size=14), "New Note")
+                paste_act = None
+                if self._has_clipboard:
+                    paste_act = menu.addAction(create_paste_icon("#8e8e93", size=14), "Paste")
                 select_act = menu.addAction(create_checkbox_icon("#8e8e93", size=14), "Select Notes...")
 
                 action = menu.exec(self.list_widget.viewport().mapToGlobal(pos))
                 if action == new_note_act:
                     self.create_note_requested.emit()
+                elif paste_act is not None and action == paste_act:
+                    self.paste_requested.emit()
                 elif action == select_act:
                     self.enter_selection_mode()
             return
@@ -559,7 +652,15 @@ class NoteListPanel(QWidget):
             rename_act = menu.addAction(create_edit_icon("#8e8e93", size=14), "Rename Note...")
             select_act = menu.addAction(create_checkbox_icon("#8e8e93", size=14), "Select...")
 
+            menu.addSeparator()
+            cut_act = menu.addAction(create_cut_icon("#8e8e93", size=14), "Cut")
+            copy_act = menu.addAction(create_copy_icon("#8e8e93", size=14), "Copy")
+            paste_act = None
+            if self._has_clipboard:
+                paste_act = menu.addAction(create_paste_icon("#8e8e93", size=14), "Paste")
+
             # Color options submenu
+            menu.addSeparator()
             color_menu = menu.addMenu("Color")
             color_menu.menuAction().setIcon(create_color_circle_icon("#bf5af2", size=14))
             self._populate_color_menu(color_menu, note)
@@ -575,6 +676,12 @@ class NoteListPanel(QWidget):
                 self.rename_note_requested.emit(note)
             elif action == select_act:
                 self.enter_selection_mode(initial_note_path=str(note.path))
+            elif action == cut_act:
+                self.cut_note_requested.emit(note)
+            elif action == copy_act:
+                self.copy_note_requested.emit(note)
+            elif paste_act is not None and action == paste_act:
+                self.paste_requested.emit()
             elif action == delete_act:
                 self.delete_note_requested.emit(note)
         else:

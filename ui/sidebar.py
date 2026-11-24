@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
-from PyQt6.QtCore import QEvent, QModelIndex, QObject, QPoint, QRect, QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QMouseEvent, QPainter
+from PyQt6.QtCore import QEvent, QMimeData, QModelIndex, QObject, QPoint, QRect, QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QDrag, QDragEnterEvent, QDragLeaveEvent, QDragMoveEvent, QDropEvent, QMouseEvent, QPainter, QPen
 from PyQt6.QtWidgets import (
+    QAbstractItemView,
     QHBoxLayout,
     QLabel,
     QMenu,
@@ -24,6 +26,7 @@ from PyQt6.QtWidgets import (
 
 from ui.context_menu import ModernContextMenu
 from ui.dialogs import ModernColorDialog, ModernInputDialog
+from ui.note_list import MIME_WORKSPACE_ITEM
 from utils.file_validator import MAX_FOLDER_NAME_LENGTH, validate_folder_name
 from utils.paths import collect_ancestors_in_set, collect_folder_and_descendants
 from utils.sorting import DEFAULT_SORT_ORDER, normalize_sort_order, sort_folders
@@ -35,15 +38,115 @@ from utils.icons import (
     create_close_icon,
     create_collapse_all_icon,
     create_color_circle_icon,
+    create_copy_icon,
+    create_cut_icon,
     create_edit_icon,
     create_folder_icon,
     create_open_folder_icon,
+    create_paste_icon,
     create_pin_icon,
     create_plus_icon,
     create_sidebar_toggle_icon,
     create_trash_icon,
     create_uncheck_icon,
 )
+
+
+class _DraggableFolderTreeWidget(QTreeWidget):
+    """QTreeWidget supporting dragging folders and dropping notes/folders onto targets."""
+
+    def __init__(self, sidebar: "FolderSidebar") -> None:
+        super().__init__(parent=sidebar)
+        self._sidebar = sidebar
+        self._drop_target_item: Optional[QTreeWidgetItem] = None
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.setDropIndicatorShown(False)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
+        self.setDefaultDropAction(Qt.DropAction.MoveAction)
+
+    def startDrag(self, supportedActions: Qt.DropAction) -> None:
+        if self._sidebar.is_selection_mode:
+            return
+        item = self.currentItem()
+        if item is None:
+            return
+        folder: Optional[Path] = item.data(0, Qt.ItemDataRole.UserRole)
+        if folder is None:
+            return
+
+        mime = QMimeData()
+        payload = json.dumps({"kind": "folder", "path": str(folder)}).encode("utf-8")
+        mime.setData(MIME_WORKSPACE_ITEM, payload)
+
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+        drag.exec(
+            Qt.DropAction.MoveAction | Qt.DropAction.CopyAction,
+            Qt.DropAction.MoveAction,
+        )
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        if self._sidebar.is_selection_mode or not event.mimeData().hasFormat(MIME_WORKSPACE_ITEM):
+            event.ignore()
+            return
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            event.setDropAction(Qt.DropAction.CopyAction)
+        else:
+            event.setDropAction(Qt.DropAction.MoveAction)
+        event.accept()
+
+    def dragMoveEvent(self, event: QDragMoveEvent) -> None:
+        if self._sidebar.is_selection_mode or not event.mimeData().hasFormat(MIME_WORKSPACE_ITEM):
+            event.ignore()
+            return
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            event.setDropAction(Qt.DropAction.CopyAction)
+        else:
+            event.setDropAction(Qt.DropAction.MoveAction)
+        hovered = self.itemAt(event.position().toPoint())
+        if hovered is not self._drop_target_item:
+            self._drop_target_item = hovered
+            self.viewport().update()
+        event.accept()
+
+    def dragLeaveEvent(self, event: QDragLeaveEvent) -> None:
+        if self._drop_target_item is not None:
+            self._drop_target_item = None
+            self.viewport().update()
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        self._drop_target_item = None
+        self.viewport().update()
+        if self._sidebar.is_selection_mode or not event.mimeData().hasFormat(MIME_WORKSPACE_ITEM):
+            event.ignore()
+            return
+
+        try:
+            raw = bytes(event.mimeData().data(MIME_WORKSPACE_ITEM)).decode("utf-8")
+            payload = json.loads(raw)
+            kind = str(payload.get("kind", ""))
+            src_path = Path(str(payload.get("path", "")))
+        except (ValueError, TypeError, OSError):
+            event.ignore()
+            return
+
+        if kind not in ("note", "folder") or not str(src_path):
+            event.ignore()
+            return
+
+        target_item = self.itemAt(event.position().toPoint())
+        target_folder: Optional[Path] = (
+            target_item.data(0, Qt.ItemDataRole.UserRole)
+            if target_item is not None
+            else None
+        )
+        is_copy = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier) or (
+            event.dropAction() == Qt.DropAction.CopyAction
+        )
+        event.acceptProposedAction()
+        self._sidebar.item_drop_requested.emit(kind, src_path, target_folder, is_copy)
 
 
 class _FolderTreeDelegate(QStyledItemDelegate):
@@ -56,8 +159,28 @@ class _FolderTreeDelegate(QStyledItemDelegate):
     def paint(
         self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex
     ) -> None:
-        super().paint(painter, option, index)
         folder: Optional[Path] = index.data(Qt.ItemDataRole.UserRole)
+        is_cut = folder is not None and self._sidebar._cut_path == folder
+        is_drop_target = (
+            self._sidebar.tree_widget._drop_target_item is not None
+            and self._sidebar.tree_widget.indexFromItem(
+                self._sidebar.tree_widget._drop_target_item
+            )
+            == index
+        )
+        if is_cut:
+            painter.save()
+            painter.setOpacity(0.5)
+        super().paint(painter, option, index)
+        if is_cut:
+            painter.restore()
+        if is_drop_target:
+            painter.save()
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            painter.setPen(QPen(QColor("#0a84ff"), 1.5))
+            painter.setBrush(QColor(10, 132, 255, 36))
+            painter.drawRoundedRect(option.rect.adjusted(2, 1, -2, -1), 5, 5)
+            painter.restore()
         if folder is not None and not self._sidebar.is_selection_mode and self._sidebar.is_folder_pinned(folder):
             icon_sz = max(11, int(round(12 * self._sidebar.ui_scale)))
             x = option.rect.right() - icon_sz - 8
@@ -83,6 +206,12 @@ class FolderSidebar(QWidget):
     folder_color_changed = pyqtSignal(str, object)  # Emits (folder_name, hex_color_or_None)
     folder_expansion_changed = pyqtSignal()
     pin_folder_requested = pyqtSignal(object)  # Emits Path
+    item_drop_requested = pyqtSignal(str, object, object, bool)  # (kind, src_path, target_folder_or_None, is_copy)
+    cut_folder_requested = pyqtSignal(object)  # Emits Path
+    copy_folder_requested = pyqtSignal(object)  # Emits Path
+    paste_into_folder_requested = pyqtSignal(object)  # Emits Optional[Path] (None = root)
+    undo_file_op_requested = pyqtSignal()
+    cancel_clipboard_requested = pyqtSignal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent=parent)
@@ -96,7 +225,17 @@ class FolderSidebar(QWidget):
         self._selected_folders: Set[Path] = set()
         self._pre_selection_folder: Optional[Path] = None
         self._folder_colors: Dict[str, str] = {}
+        self._has_clipboard: bool = False
+        self._cut_path: Optional[Path] = None
         self._init_ui()
+
+    def set_clipboard_state(
+        self, has_clipboard: bool, cut_path: Optional[Path] = None
+    ) -> None:
+        """Update visual cut dimming and Paste menu availability."""
+        self._has_clipboard = bool(has_clipboard)
+        self._cut_path = cut_path
+        self.tree_widget.viewport().update()
 
     def set_sort_order(self, sort_order: str, current_selection: Optional[Path] = None) -> None:
         """Update folder tree sort order and re-render all hierarchy levels."""
@@ -241,7 +380,7 @@ class FolderSidebar(QWidget):
         layout.addWidget(self.header_stack, 0)
 
         # Folder Tree Widget
-        self.tree_widget = QTreeWidget(parent=self)
+        self.tree_widget = _DraggableFolderTreeWidget(self)
         self.tree_widget.setObjectName("SidebarTree")
         self.tree_widget.setHeaderHidden(True)
         self.tree_widget.setIndentation(16)
@@ -378,6 +517,38 @@ class FolderSidebar(QWidget):
                         if folder is not None:
                             self.rename_folder_requested.emit(folder)
                             return True
+            if not self._is_selection_mode:
+                mods = key_event.modifiers()
+                ctrl_only = bool(mods & Qt.KeyboardModifier.ControlModifier) and not bool(
+                    mods
+                    & (
+                        Qt.KeyboardModifier.AltModifier
+                        | Qt.KeyboardModifier.MetaModifier
+                        | Qt.KeyboardModifier.ShiftModifier
+                    )
+                )
+                if ctrl_only:
+                    current_item = self.tree_widget.currentItem()
+                    folder = (
+                        current_item.data(0, Qt.ItemDataRole.UserRole)
+                        if current_item is not None
+                        else None
+                    )
+                    if key_event.key() == Qt.Key.Key_X and folder is not None:
+                        self.cut_folder_requested.emit(folder)
+                        return True
+                    if key_event.key() == Qt.Key.Key_C and folder is not None:
+                        self.copy_folder_requested.emit(folder)
+                        return True
+                    if key_event.key() == Qt.Key.Key_V and self._has_clipboard:
+                        self.paste_into_folder_requested.emit(folder)
+                        return True
+                    if key_event.key() == Qt.Key.Key_Z:
+                        self.undo_file_op_requested.emit()
+                        return True
+                if key_event.key() == Qt.Key.Key_Escape and self._cut_path is not None:
+                    self.cancel_clipboard_requested.emit()
+                    return True
             if key_event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
                 if self._is_selection_mode:
                     if self._selected_folders:
@@ -453,11 +624,16 @@ class FolderSidebar(QWidget):
         if item is None:
             # Right-click in empty space: keep current folder focus, create root parent folder
             new_folder_act = menu.addAction(create_plus_icon("#8e8e93", size=14), "New Folder...")
+            paste_act = None
+            if self._has_clipboard:
+                paste_act = menu.addAction(create_paste_icon("#8e8e93", size=14), "Paste")
             select_act = menu.addAction(create_checkbox_icon("#8e8e93", size=14), "Select Notes...")
 
             action = menu.exec(self.tree_widget.viewport().mapToGlobal(pos))
             if action == new_folder_act:
                 self._on_add_folder_clicked(force_root=True)
+            elif paste_act is not None and action == paste_act:
+                self.paste_into_folder_requested.emit(None)
             elif action == select_act:
                 self.select_all_notes_requested.emit()
             return
@@ -474,7 +650,15 @@ class FolderSidebar(QWidget):
             rename_act = menu.addAction(create_edit_icon("#8e8e93", size=14), "Rename Folder...")
             select_act = menu.addAction(create_checkbox_icon("#8e8e93", size=14), "Select...")
 
+            menu.addSeparator()
+            cut_act = menu.addAction(create_cut_icon("#8e8e93", size=14), "Cut")
+            copy_act = menu.addAction(create_copy_icon("#8e8e93", size=14), "Copy")
+            paste_act = None
+            if self._has_clipboard:
+                paste_act = menu.addAction(create_paste_icon("#8e8e93", size=14), "Paste")
+
             # Color options submenu
+            menu.addSeparator()
             color_menu = menu.addMenu("Color")
             color_menu.menuAction().setIcon(create_color_circle_icon("#bf5af2", size=14))
             self._populate_color_menu(color_menu, folder_name)
@@ -501,11 +685,20 @@ class FolderSidebar(QWidget):
                 self.rename_folder_requested.emit(folder)
             elif action == select_act:
                 self.enter_selection_mode(initial_folder=folder)
+            elif action == cut_act:
+                self.cut_folder_requested.emit(folder)
+            elif action == copy_act:
+                self.copy_folder_requested.emit(folder)
+            elif paste_act is not None and action == paste_act:
+                self.paste_into_folder_requested.emit(folder)
             elif action == delete_act:
                 self.delete_folder_requested.emit(folder)
         else:
             # 'All Notes'
             new_folder_act = menu.addAction(create_plus_icon("#8e8e93", size=14), "New Folder...")
+            paste_act = None
+            if self._has_clipboard:
+                paste_act = menu.addAction(create_paste_icon("#8e8e93", size=14), "Paste")
             select_act = menu.addAction(create_checkbox_icon("#8e8e93", size=14), "Select Notes...")
 
             color_menu = menu.addMenu("Color")
@@ -515,6 +708,8 @@ class FolderSidebar(QWidget):
             action = menu.exec(self.tree_widget.viewport().mapToGlobal(pos))
             if action == new_folder_act:
                 self._on_add_folder_clicked(force_root=True)
+            elif paste_act is not None and action == paste_act:
+                self.paste_into_folder_requested.emit(None)
             elif action == select_act:
                 self.select_all_notes_requested.emit()
 

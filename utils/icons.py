@@ -346,6 +346,21 @@ def create_sync_icon(color: str = "#ffffff", size: int = 16, stroke_width: float
     return render_lucide_icon("refresh-cw", color=color, size=size, stroke_width=stroke_width)
 
 
+def create_cut_icon(color: str = "#8e8e93", size: int = 14, stroke_width: float = 1.6) -> QIcon:
+    """Generate a crisp scissors icon for Cut actions."""
+    return render_lucide_icon("scissors", color=color, size=size, stroke_width=stroke_width)
+
+
+def create_copy_icon(color: str = "#8e8e93", size: int = 14, stroke_width: float = 1.6) -> QIcon:
+    """Generate a crisp overlapping-pages icon for Copy actions."""
+    return render_lucide_icon("copy", color=color, size=size, stroke_width=stroke_width)
+
+
+def create_paste_icon(color: str = "#8e8e93", size: int = 14, stroke_width: float = 1.6) -> QIcon:
+    """Generate a crisp clipboard-paste icon for Paste actions."""
+    return render_lucide_icon("clipboard-paste", color=color, size=size, stroke_width=stroke_width)
+
+
 def create_collapse_all_icon(
     collapsed: bool = False,
     color: str = "#8e8e93",

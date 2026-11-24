@@ -11,6 +11,7 @@ from PyQt6.QtGui import QCloseEvent, QIcon, QKeyEvent, QKeySequence, QShortcut
 from PyQt6.QtWidgets import QApplication, QMainWindow, QMessageBox, QSplitter, QWidget
 
 from core.config import ConfigManager
+from core.file_ops_undo import FileOpRecord, FileOperationUndoStack
 from core.note import Note
 from core.storage import StorageManager
 from ui.backup_panel import BackupPanel
@@ -20,6 +21,7 @@ from ui.note_list import NoteListPanel
 from ui.sidebar import FolderSidebar
 from utils.file_validator import MAX_FOLDER_NAME_LENGTH, validate_folder_name, validate_markdown_file
 from utils.note_io import AsyncSaveQueue, note_matches_query
+from utils.paths import folder_contains_pinned_items, is_invalid_folder_transfer
 from utils.sorting import normalize_sort_order, sort_notes
 
 ZOOM_STEPS: tuple[float, ...] = (0.75, 0.85, 0.9, 1.0, 1.1, 1.25, 1.4, 1.6, 1.8, 2.0)
@@ -74,6 +76,8 @@ class MainWindow(QMainWindow):
         self._session_timer.timeout.connect(self._flush_session_state)
         self._active_pane_anim: Optional[QVariantAnimation] = None
         self._registered_shortcuts: List[QShortcut] = []
+        self._file_undo_stack = FileOperationUndoStack()
+        self._clipboard_item: Optional[tuple[str, str, Path]] = None
         self._active_modal_overlay: Optional[QWidget] = None
         self._is_initializing: bool = False
 
@@ -107,6 +111,12 @@ class MainWindow(QMainWindow):
         self.sidebar.folder_color_changed.connect(self._on_folder_color_changed)
         self.sidebar.folder_expansion_changed.connect(self._schedule_session_save)
         self.sidebar.pin_folder_requested.connect(self._on_toggle_pin_folder)
+        self.sidebar.item_drop_requested.connect(self._on_sidebar_item_dropped)
+        self.sidebar.cut_folder_requested.connect(self._on_cut_folder)
+        self.sidebar.copy_folder_requested.connect(self._on_copy_folder)
+        self.sidebar.paste_into_folder_requested.connect(self._on_paste_into_folder)
+        self.sidebar.undo_file_op_requested.connect(self._on_undo_file_operation)
+        self.sidebar.cancel_clipboard_requested.connect(self._clear_clipboard)
 
         # 2. Middle: Note Cards List
         self.note_list = NoteListPanel(parent=self.splitter)
@@ -121,6 +131,11 @@ class MainWindow(QMainWindow):
         self.note_list.delete_notes_batch_requested.connect(self._on_delete_notes_batch)
         self.note_list.note_color_changed.connect(self._on_note_color_changed)
         self.note_list.pin_note_requested.connect(self._on_toggle_pin_note)
+        self.note_list.cut_note_requested.connect(self._on_cut_note)
+        self.note_list.copy_note_requested.connect(self._on_copy_note)
+        self.note_list.paste_requested.connect(self._on_paste_into_current_folder)
+        self.note_list.undo_file_op_requested.connect(self._on_undo_file_operation)
+        self.note_list.cancel_clipboard_requested.connect(self._clear_clipboard)
 
         # 3. Middle-Right: Editor Canvas
         self.editor = EditorPanel(parent=self.splitter)
@@ -1490,6 +1505,292 @@ class MainWindow(QMainWindow):
             if reloaded:
                 self.editor.load_note(reloaded)
         self._refresh_notes(preserve_path=str(reverted_file) if reverted_file.exists() else None)
+
+    def _is_note_pinned_path(self, note_path: Path) -> bool:
+        """Return True if note_path is currently pinned."""
+        key = self._serialize_workspace_path(note_path)
+        return key in self.config.general.pinned_notes
+
+    def _is_folder_blocked_by_pins(self, folder_path: Path) -> bool:
+        """Return True if folder_path is pinned or contains any pinned notes or subfolders."""
+        return folder_contains_pinned_items(
+            folder_path,
+            self.config.general.pinned_notes,
+            self.config.general.pinned_folders,
+            self.storage.root_dir,
+        )
+
+    def _warn_pinned_move_blocked(self, item_type: str) -> None:
+        """Inform the user that pinned items must be unpinned before moving."""
+        if item_type == "folder":
+            msg = (
+                "This folder is pinned or contains pinned items. "
+                "Please unpin them first before moving."
+            )
+        else:
+            msg = "This note is pinned. Please unpin it first before moving."
+        ModernMessageDialog.show_info(self, "Unpin Required", msg)
+
+    def _sync_clipboard_ui(self) -> None:
+        """Sync clipboard Paste availability and cut visual dimming to sidebar and note list."""
+        has_clip = self._clipboard_item is not None
+        cut_folder: Optional[Path] = None
+        cut_note: Optional[Path] = None
+        if self._clipboard_item is not None:
+            mode, kind, path = self._clipboard_item
+            if mode == "cut":
+                if kind == "folder":
+                    cut_folder = path
+                else:
+                    cut_note = path
+        self.sidebar.set_clipboard_state(has_clip, cut_folder)
+        self.note_list.set_clipboard_state(has_clip, cut_note)
+
+    def _clear_clipboard(self) -> None:
+        """Clear any pending cut/copy clipboard item."""
+        self._clipboard_item = None
+        self._sync_clipboard_ui()
+
+    def _on_cut_note(self, note: Note) -> None:
+        """Place a note onto the workspace clipboard in cut mode (blocking pinned notes)."""
+        if self._is_note_pinned_path(note.path):
+            self._warn_pinned_move_blocked("note")
+            return
+        self._clipboard_item = ("cut", "note", note.path)
+        self._sync_clipboard_ui()
+
+    def _on_copy_note(self, note: Note) -> None:
+        """Place a note onto the workspace clipboard in copy mode."""
+        self._clipboard_item = ("copy", "note", note.path)
+        self._sync_clipboard_ui()
+
+    def _on_cut_folder(self, folder_path: Path) -> None:
+        """Place a folder onto the workspace clipboard in cut mode (blocking pinned folders)."""
+        if self._is_folder_blocked_by_pins(folder_path):
+            self._warn_pinned_move_blocked("folder")
+            return
+        self._clipboard_item = ("cut", "folder", folder_path)
+        self._sync_clipboard_ui()
+
+    def _on_copy_folder(self, folder_path: Path) -> None:
+        """Place a folder onto the workspace clipboard in copy mode."""
+        self._clipboard_item = ("copy", "folder", folder_path)
+        self._sync_clipboard_ui()
+
+    def _on_paste_into_current_folder(self) -> None:
+        """Paste the clipboard item into the currently active folder (or vault root)."""
+        self._on_paste_into_folder(self._current_folder)
+
+    def _on_paste_into_folder(self, target_folder: Optional[Path]) -> None:
+        """Paste the clipboard item into target_folder (None means vault root)."""
+        if self._clipboard_item is None:
+            return
+        mode, kind, src_path = self._clipboard_item
+        if not src_path.exists():
+            self._clear_clipboard()
+            return
+        succeeded = self._execute_item_transfer(
+            kind=kind,
+            src_path=src_path,
+            target_folder=target_folder,
+            is_copy=(mode == "copy"),
+        )
+        if succeeded and mode == "cut":
+            self._clear_clipboard()
+
+    def _on_sidebar_item_dropped(
+        self,
+        kind: str,
+        src_path: Path,
+        target_folder: Optional[Path],
+        is_copy: bool,
+    ) -> None:
+        """Handle drag-and-drop of a note or folder onto a sidebar folder or root."""
+        self._execute_item_transfer(
+            kind=kind,
+            src_path=src_path,
+            target_folder=target_folder,
+            is_copy=is_copy,
+        )
+
+    def _execute_item_transfer(
+        self,
+        kind: str,
+        src_path: Path,
+        target_folder: Optional[Path],
+        is_copy: bool,
+    ) -> bool:
+        """Move or copy a note or folder into target_folder with pin checks, replace modal, and undo."""
+        target_dir = target_folder if target_folder is not None else self.storage.root_dir
+        if not src_path.exists():
+            return False
+
+        if not is_copy:
+            if kind == "note" and self._is_note_pinned_path(src_path):
+                self._warn_pinned_move_blocked("note")
+                return False
+            if kind == "folder" and self._is_folder_blocked_by_pins(src_path):
+                self._warn_pinned_move_blocked("folder")
+                return False
+
+        if kind == "folder" and is_invalid_folder_transfer(src_path, target_dir):
+            return False
+
+        candidate = target_dir / src_path.name
+        if not is_copy and candidate == src_path:
+            return False
+
+        self.flush_pending_save()
+
+        if is_copy:
+            if kind == "note":
+                dst = self.storage.copy_note(src_path, target_dir)
+            else:
+                dst = self.storage.copy_folder(src_path, target_dir)
+            if dst is None:
+                return False
+            self._file_undo_stack.push(
+                FileOpRecord(kind="copy", item_type=kind, src_path=src_path, dst_path=dst)
+            )
+            self._refresh_after_workspace_transfer(
+                select_note_path=dst if kind == "note" else None
+            )
+            return True
+
+        # Move flow: prompt VS Code-style replace modal if destination already exists
+        replace = False
+        if candidate.exists():
+            noun = "folder" if kind == "folder" else "file"
+            dest_name = target_dir.name if target_dir != self.storage.root_dir else "root"
+            confirmed = ModernConfirmDialog.ask(
+                self,
+                title=f"Replace {noun.title()}",
+                message=(
+                    f"A {noun} named '{src_path.name}' already exists in '{dest_name}'. "
+                    f"Would you like to replace it?"
+                ),
+                confirm_text="Yes",
+                cancel_text="Cancel",
+                is_destructive=True,
+            )
+            if not confirmed:
+                return False
+            replace = True
+
+        if kind == "note":
+            dst, replaced_backup = self.storage.move_note(src_path, target_dir, replace=replace)
+        else:
+            dst, replaced_backup = self.storage.move_folder(src_path, target_dir, replace=replace)
+
+        if dst is None:
+            return False
+
+        self._file_undo_stack.push(
+            FileOpRecord(
+                kind="move",
+                item_type=kind,
+                src_path=src_path,
+                dst_path=dst,
+                replaced_backup_path=replaced_backup,
+            )
+        )
+
+        # Invalidate caches & remap active note/folder pointers cleanly
+        if kind == "note":
+            self.editor.invalidate_note_cache(src_path)
+            self.editor.invalidate_note_cache(dst)
+            if self._current_note is not None and self._current_note.path == src_path:
+                reloaded = Note.from_file(dst)
+                self._current_note = reloaded
+                if reloaded is not None:
+                    self.editor.load_note(reloaded)
+        else:
+            self.editor.invalidate_folder_cache(src_path)
+            self.editor.invalidate_folder_cache(dst)
+            if self._current_folder is not None:
+                if self._current_folder == src_path:
+                    self._current_folder = dst
+                elif src_path in self._current_folder.parents:
+                    rel = self._current_folder.relative_to(src_path)
+                    self._current_folder = dst / rel
+            if self._current_note is not None and src_path in self._current_note.path.parents:
+                rel_note = self._current_note.path.relative_to(src_path)
+                remapped = dst / rel_note
+                reloaded = Note.from_file(remapped)
+                self._current_note = reloaded
+                if reloaded is not None:
+                    self.editor.load_note(reloaded)
+
+        self._refresh_after_workspace_transfer(
+            select_note_path=self._current_note.path if self._current_note else None
+        )
+        return True
+
+    def _on_undo_file_operation(self) -> None:
+        """Undo the most recent workspace file/folder move or copy operation."""
+        record = self._file_undo_stack.pop_undo()
+        if record is None:
+            return
+
+        self.flush_pending_save()
+        if not self.storage.undo_file_operation(record):
+            return
+
+        if record.item_type == "note":
+            self.editor.invalidate_note_cache(record.dst_path)
+            self.editor.invalidate_note_cache(record.src_path)
+            if self._current_note is not None and self._current_note.path == record.dst_path:
+                if record.kind == "move" and record.src_path.exists():
+                    reloaded = Note.from_file(record.src_path)
+                    self._current_note = reloaded
+                    if reloaded is not None:
+                        self.editor.load_note(reloaded)
+                else:
+                    self._current_note = None
+                    self.editor.load_note(None)
+        else:
+            self.editor.invalidate_folder_cache(record.dst_path)
+            self.editor.invalidate_folder_cache(record.src_path)
+            if self._current_folder is not None:
+                if self._current_folder == record.dst_path:
+                    self._current_folder = record.src_path if record.kind == "move" else None
+                elif record.dst_path in self._current_folder.parents:
+                    if record.kind == "move":
+                        rel = self._current_folder.relative_to(record.dst_path)
+                        self._current_folder = record.src_path / rel
+                    else:
+                        self._current_folder = None
+            if self._current_note is not None and record.dst_path in self._current_note.path.parents:
+                if record.kind == "move":
+                    rel_note = self._current_note.path.relative_to(record.dst_path)
+                    remapped = record.src_path / rel_note
+                    reloaded = Note.from_file(remapped)
+                    self._current_note = reloaded
+                    if reloaded is not None:
+                        self.editor.load_note(reloaded)
+                else:
+                    self._current_note = None
+                    self.editor.load_note(None)
+
+        self._refresh_after_workspace_transfer(
+            select_note_path=self._current_note.path if self._current_note else None
+        )
+
+    def _refresh_after_workspace_transfer(
+        self, select_note_path: Optional[Path] = None
+    ) -> None:
+        """Reload folders, watcher paths, note cards, and backup status after a file op."""
+        sort_order = self._get_sort_order()
+        self.sidebar.set_folders(
+            self.storage.get_folders(sort_order=sort_order),
+            current_selection=self._current_folder,
+            sort_order=sort_order,
+        )
+        self._update_watcher_paths()
+        preserve = str(select_note_path) if select_note_path and select_note_path.exists() else None
+        self._refresh_notes(preserve_path=preserve, emit_selection=False)
+        self.backup_panel.refresh_status()
+        self.backup_panel.schedule_auto_backup()
 
     def flush_pending_save(self) -> None:
         """Flush any unsaved debounced editor changes and wait for background disk writes."""

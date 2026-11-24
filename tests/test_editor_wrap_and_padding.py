@@ -119,7 +119,12 @@ class TestEditorWrapAndPadding(unittest.TestCase):
 
     def test_main_window_word_wrap_persistence(self) -> None:
         """Verify word wrap toggling from MainWindow updates config manager."""
-        win = MainWindow(config_manager=self.config_manager)
+        from core.storage import StorageManager
+
+        win = MainWindow(
+            storage_manager=StorageManager(self.config_manager.config_path.parent / "vault"),
+            config_manager=self.config_manager,
+        )
         self.assertTrue(self.config_manager.settings.editor.word_wrap)
 
         # Toggle word wrap via editor

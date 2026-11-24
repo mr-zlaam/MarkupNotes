@@ -3,11 +3,18 @@
 import os
 from pathlib import Path
 import re
+import shutil
 import tempfile
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
+from core.file_ops_undo import FileOpRecord
 from core.note import Note
-from utils.paths import get_default_notes_dir, prune_nested_paths
+from utils.paths import (
+    get_default_notes_dir,
+    is_invalid_folder_transfer,
+    prune_nested_paths,
+    resolve_copy_target_path,
+)
 from utils.sorting import DEFAULT_SORT_ORDER, sort_folders, sort_notes
 
 
@@ -235,6 +242,154 @@ class StorageManager:
             if self.delete_folder(path):
                 deleted_count += 1
         return deleted_count
+
+    def _move_to_trash_path(self, path: Path) -> Optional[Path]:
+        """Move an existing file or folder to .trash and return the exact backup path."""
+        trash_dir = self.root_dir / ".trash"
+        try:
+            trash_dir.mkdir(parents=True, exist_ok=True)
+            trash_target = trash_dir / path.name
+            counter = 1
+            while trash_target.exists():
+                if path.is_dir():
+                    trash_target = trash_dir / f"{path.name}_{counter}"
+                else:
+                    trash_target = trash_dir / f"{path.stem}_{counter}{path.suffix}"
+                counter += 1
+            path.rename(trash_target)
+            return trash_target
+        except (PermissionError, OSError):
+            return None
+
+    def move_note(
+        self,
+        src_path: Path,
+        target_dir: Path,
+        *,
+        replace: bool = False,
+    ) -> Tuple[Optional[Path], Optional[Path]]:
+        """Move a note into target_dir. Returns (new_path, replaced_trash_backup)."""
+        if not src_path.exists() or not src_path.is_file():
+            return None, None
+        target_dir.mkdir(parents=True, exist_ok=True)
+        dst_path = target_dir / src_path.name
+        if dst_path == src_path:
+            return src_path, None
+
+        replaced_backup: Optional[Path] = None
+        if dst_path.exists():
+            if not replace:
+                return None, None
+            replaced_backup = self._move_to_trash_path(dst_path)
+            if replaced_backup is None:
+                return None, None
+
+        try:
+            src_path.rename(dst_path)
+            return dst_path, replaced_backup
+        except (PermissionError, OSError):
+            if replaced_backup is not None and replaced_backup.exists():
+                try:
+                    replaced_backup.rename(dst_path)
+                except (PermissionError, OSError):
+                    pass
+            return None, None
+
+    def copy_note(self, src_path: Path, target_dir: Path) -> Optional[Path]:
+        """Copy a note into target_dir with collision-safe 'copy', 'copy1', ... naming."""
+        if not src_path.exists() or not src_path.is_file():
+            return None
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+            dst_path = resolve_copy_target_path(target_dir, src_path.name, is_dir=False)
+            shutil.copy2(src_path, dst_path)
+            return dst_path
+        except (PermissionError, OSError):
+            return None
+
+    def move_folder(
+        self,
+        src_folder: Path,
+        target_dir: Path,
+        *,
+        replace: bool = False,
+    ) -> Tuple[Optional[Path], Optional[Path]]:
+        """Move a folder into target_dir. Returns (new_path, replaced_trash_backup)."""
+        if (
+            not src_folder.exists()
+            or not src_folder.is_dir()
+            or src_folder == self.root_dir
+            or is_invalid_folder_transfer(src_folder, target_dir)
+        ):
+            return None, None
+        target_dir.mkdir(parents=True, exist_ok=True)
+        dst_path = target_dir / src_folder.name
+        if dst_path == src_folder:
+            return src_folder, None
+
+        replaced_backup: Optional[Path] = None
+        if dst_path.exists():
+            if not replace:
+                return None, None
+            replaced_backup = self._move_to_trash_path(dst_path)
+            if replaced_backup is None:
+                return None, None
+
+        try:
+            src_folder.rename(dst_path)
+            return dst_path, replaced_backup
+        except (PermissionError, OSError):
+            if replaced_backup is not None and replaced_backup.exists():
+                try:
+                    replaced_backup.rename(dst_path)
+                except (PermissionError, OSError):
+                    pass
+            return None, None
+
+    def copy_folder(self, src_folder: Path, target_dir: Path) -> Optional[Path]:
+        """Copy a folder recursively into target_dir with 'copy', 'copy1', ... naming."""
+        if (
+            not src_folder.exists()
+            or not src_folder.is_dir()
+            or src_folder == self.root_dir
+            or is_invalid_folder_transfer(src_folder, target_dir)
+        ):
+            return None
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+            dst_path = resolve_copy_target_path(target_dir, src_folder.name, is_dir=True)
+            shutil.copytree(src_folder, dst_path)
+            return dst_path
+        except (PermissionError, OSError):
+            return None
+
+    def undo_file_operation(self, record: FileOpRecord) -> bool:
+        """Reverse a previously recorded move or copy operation cleanly."""
+        try:
+            if record.kind == "copy":
+                if not record.dst_path.exists():
+                    return False
+                if record.item_type == "folder":
+                    return self.delete_folder(record.dst_path)
+                return self.delete_note(record.dst_path)
+
+            if record.kind == "move":
+                if not record.dst_path.exists():
+                    return False
+                record.src_path.parent.mkdir(parents=True, exist_ok=True)
+                if record.src_path.exists():
+                    return False
+                record.dst_path.rename(record.src_path)
+                if (
+                    record.replaced_backup_path is not None
+                    and record.replaced_backup_path.exists()
+                    and not record.dst_path.exists()
+                ):
+                    record.replaced_backup_path.rename(record.dst_path)
+                return True
+        except (PermissionError, OSError):
+            return False
+        return False
 
     @staticmethod
     def sanitize_filename(name: str) -> str:
