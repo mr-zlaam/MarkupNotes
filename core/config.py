@@ -33,6 +33,8 @@ class GeneralConfig:
     startup_action: str = "last_note"  # "last_note", "welcome", "empty"
     ui_scale: float = 1.0
     default_sort_order: str = DEFAULT_SORT_ORDER  # "name_asc", "name_desc", "newest", "oldest"
+    pinned_notes: List[str] = field(default_factory=list)
+    pinned_folders: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -93,12 +95,24 @@ class AppSettings:
     def from_dict(cls, data: Dict[str, Any]) -> "AppSettings":
         """Instantiate AppSettings with safe fallback defaults for any missing keys."""
         gen_data = data.get("general", {})
+        raw_pinned_notes = gen_data.get("pinned_notes", [])
+        raw_pinned_folders = gen_data.get("pinned_folders", [])
         general = GeneralConfig(
             confirm_delete=bool(gen_data.get("confirm_delete", True)),
             default_note_name=str(gen_data.get("default_note_name", "Untitled Note")),
             startup_action=str(gen_data.get("startup_action", "last_note")),
             ui_scale=float(gen_data.get("ui_scale", 1.0)),
             default_sort_order=normalize_sort_order(gen_data.get("default_sort_order")),
+            pinned_notes=(
+                [str(p) for p in raw_pinned_notes if isinstance(p, str) and p]
+                if isinstance(raw_pinned_notes, list)
+                else []
+            ),
+            pinned_folders=(
+                [str(p) for p in raw_pinned_folders if isinstance(p, str) and p]
+                if isinstance(raw_pinned_folders, list)
+                else []
+            ),
         )
 
         win_data = data.get("window", {})
@@ -377,6 +391,73 @@ class ConfigManager:
         self.settings.appearance.folder_colors.clear()
         self.settings.appearance.note_colors.clear()
         self.save()
+
+    def toggle_pin_note(self, rel_path: str) -> bool:
+        """Toggle pin state for a note (latest pin moves to index 0). Returns new pinned state."""
+        pins = self.settings.general.pinned_notes
+        if rel_path in pins:
+            pins.remove(rel_path)
+            self.save()
+            return False
+        pins.insert(0, rel_path)
+        self.save()
+        return True
+
+    def toggle_pin_folder(self, rel_path: str) -> bool:
+        """Toggle pin state for a folder (latest pin moves to index 0). Returns new pinned state."""
+        pins = self.settings.general.pinned_folders
+        if rel_path in pins:
+            pins.remove(rel_path)
+            self.save()
+            return False
+        pins.insert(0, rel_path)
+        self.save()
+        return True
+
+    def transfer_note_pin(self, old_rel_path: str, new_rel_path: str) -> None:
+        """Preserve a pinned note's position when its file is renamed."""
+        pins = self.settings.general.pinned_notes
+        if old_rel_path in pins:
+            idx = pins.index(old_rel_path)
+            pins[idx] = new_rel_path
+            self.save()
+
+    def remove_note_pin(self, rel_path: str) -> None:
+        """Remove a note from pinned_notes if present."""
+        pins = self.settings.general.pinned_notes
+        if rel_path in pins:
+            pins.remove(rel_path)
+            self.save()
+
+    def transfer_folder_pin(self, old_rel_path: str, new_rel_path: str) -> None:
+        """Update pinned folder and descendant pinned paths when a folder is renamed."""
+        changed = False
+        old_prefix = f"{old_rel_path}/"
+        new_prefix = f"{new_rel_path}/"
+        for pin_list in (self.settings.general.pinned_folders, self.settings.general.pinned_notes):
+            for i, key in enumerate(pin_list):
+                if key == old_rel_path:
+                    pin_list[i] = new_rel_path
+                    changed = True
+                elif key.startswith(old_prefix):
+                    pin_list[i] = new_prefix + key[len(old_prefix):]
+                    changed = True
+        if changed:
+            self.save()
+
+    def remove_folder_pin(self, rel_path: str) -> None:
+        """Remove a deleted folder and any pinned descendants from pin lists."""
+        prefix = f"{rel_path}/"
+        before_f = len(self.settings.general.pinned_folders)
+        before_n = len(self.settings.general.pinned_notes)
+        self.settings.general.pinned_folders = [
+            k for k in self.settings.general.pinned_folders if k != rel_path and not k.startswith(prefix)
+        ]
+        self.settings.general.pinned_notes = [
+            k for k in self.settings.general.pinned_notes if k != rel_path and not k.startswith(prefix)
+        ]
+        if len(self.settings.general.pinned_folders) != before_f or len(self.settings.general.pinned_notes) != before_n:
+            self.save()
 
     def update_session(
         self,

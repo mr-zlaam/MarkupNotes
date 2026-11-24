@@ -38,6 +38,7 @@ from utils.icons import (
     create_folder_icon,
     create_markdown_icon,
     create_notes_toggle_icon,
+    create_pin_icon,
     create_plus_icon,
     create_search_icon,
     create_sidebar_toggle_icon,
@@ -140,7 +141,15 @@ class NoteCardDelegate(QStyledItemDelegate):
 
         title_left = md_x + int(round(20 * scale))
         metrics = QFontMetrics(title_font)
-        avail_title_w = rect.width() - (title_left - rect.left()) - 10
+        pin_reserve = 0
+        if note.is_pinned:
+            pin_sz = max(11, int(round(13 * scale)))
+            pin_reserve = pin_sz + 6
+            pin_x = rect.right() - pin_sz - 8
+            pin_y = rect.top() + int(round(11 * scale))
+            pin_icon = create_pin_icon(pinned=True, color="#ff9f0a", size=pin_sz)
+            pin_icon.paint(painter, QRect(pin_x, pin_y, pin_sz, pin_sz))
+        avail_title_w = max(0, rect.width() - (title_left - rect.left()) - 10 - pin_reserve)
         elided_title = metrics.elidedText(note.title, Qt.TextElideMode.ElideRight, avail_title_w)
         title_rect = QRect(title_left, rect.top() + int(round(8 * scale)), avail_title_w, max(16, int(round(20 * scale))))
         painter.drawText(title_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, elided_title)
@@ -211,6 +220,7 @@ class NoteListPanel(QWidget):
     delete_notes_batch_requested = pyqtSignal(list)  # Emits List[Note]
     selection_mode_changed = pyqtSignal(bool)
     note_color_changed = pyqtSignal(object, object)  # Emits (Note, hex_color_or_None)
+    pin_note_requested = pyqtSignal(object)  # Emits Note instance
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent=parent)
@@ -537,6 +547,15 @@ class NoteListPanel(QWidget):
         menu = ModernContextMenu(self)
 
         if not self._is_selection_mode:
+            pin_label = "Unpin Note" if note.is_pinned else "Pin Note"
+            pin_act = menu.addAction(
+                create_pin_icon(
+                    pinned=not note.is_pinned,
+                    color="#ff9f0a" if not note.is_pinned else "#8e8e93",
+                    size=14,
+                ),
+                pin_label,
+            )
             rename_act = menu.addAction(create_edit_icon("#8e8e93", size=14), "Rename Note...")
             select_act = menu.addAction(create_checkbox_icon("#8e8e93", size=14), "Select...")
 
@@ -550,7 +569,9 @@ class NoteListPanel(QWidget):
             delete_act.setProperty("is_destructive", True)
 
             action = menu.exec(self.list_widget.viewport().mapToGlobal(pos))
-            if action == rename_act:
+            if action == pin_act:
+                self.pin_note_requested.emit(note)
+            elif action == rename_act:
                 self.rename_note_requested.emit(note)
             elif action == select_act:
                 self.enter_selection_mode(initial_note_path=str(note.path))

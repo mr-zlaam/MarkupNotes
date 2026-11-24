@@ -199,6 +199,7 @@ class MarkdownEditor(QTextEdit):
     word_wrap_toggled = pyqtSignal(bool)
     collapse_all_folders_requested = pyqtSignal()
     focus_received = pyqtSignal()
+    pin_active_note_requested = pyqtSignal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent=parent)
@@ -3178,6 +3179,11 @@ class MarkdownEditor(QTextEdit):
                 self.toggle_word_wrap()
                 event.accept()
                 return
+            # Alt+P: Pin / Unpin active note
+            if event.key() == Qt.Key.Key_P or event.text().lower() == "p":
+                self.pin_active_note_requested.emit()
+                event.accept()
+                return
 
         # Standard Undo / Redo shortcuts (handled via PlainTextUndoManager)
         if event.matches(QKeySequence.StandardKey.Undo) or (
@@ -3772,6 +3778,7 @@ class EditorPanel(QWidget):
     word_wrap_toggled = pyqtSignal(bool)
     collapse_all_folders_requested = pyqtSignal()
     focus_received = pyqtSignal()
+    pin_active_note_requested = pyqtSignal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent=parent)
@@ -3911,6 +3918,7 @@ class EditorPanel(QWidget):
         self.editor.word_wrap_toggled.connect(self.word_wrap_toggled.emit)
         self.editor.collapse_all_folders_requested.connect(self.collapse_all_folders_requested.emit)
         self.editor.focus_received.connect(self.focus_received.emit)
+        self.editor.pin_active_note_requested.connect(self.pin_active_note_requested.emit)
 
         # In-note Find & Replace Bar
         self.find_replace_bar = FindReplaceBar(parent=self)

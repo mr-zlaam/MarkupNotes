@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
-from PyQt6.QtCore import QEvent, QObject, QPoint, QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QMouseEvent
+from PyQt6.QtCore import QEvent, QModelIndex, QObject, QPoint, QRect, QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QMouseEvent, QPainter
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -14,6 +14,8 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QScroller,
     QStackedWidget,
+    QStyleOptionViewItem,
+    QStyledItemDelegate,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -35,11 +37,32 @@ from utils.icons import (
     create_edit_icon,
     create_folder_icon,
     create_open_folder_icon,
+    create_pin_icon,
     create_plus_icon,
     create_sidebar_toggle_icon,
     create_trash_icon,
     create_uncheck_icon,
 )
+
+
+class _FolderTreeDelegate(QStyledItemDelegate):
+    """Item delegate rendering a subtle pin badge on pinned folder rows."""
+
+    def __init__(self, sidebar: "FolderSidebar") -> None:
+        super().__init__(sidebar)
+        self._sidebar = sidebar
+
+    def paint(
+        self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex
+    ) -> None:
+        super().paint(painter, option, index)
+        folder: Optional[Path] = index.data(Qt.ItemDataRole.UserRole)
+        if folder is not None and not self._sidebar.is_selection_mode and self._sidebar.is_folder_pinned(folder):
+            icon_sz = max(11, int(round(12 * self._sidebar.ui_scale)))
+            x = option.rect.right() - icon_sz - 8
+            y = option.rect.top() + (option.rect.height() - icon_sz) // 2
+            pin_icon = create_pin_icon(pinned=True, color="#ff9f0a", size=icon_sz)
+            pin_icon.paint(painter, QRect(x, y, icon_sz, icon_sz))
 
 
 class FolderSidebar(QWidget):
@@ -58,6 +81,7 @@ class FolderSidebar(QWidget):
     select_all_notes_requested = pyqtSignal()
     folder_color_changed = pyqtSignal(str, object)  # Emits (folder_name, hex_color_or_None)
     folder_expansion_changed = pyqtSignal()
+    pin_folder_requested = pyqtSignal(object)  # Emits Path
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent=parent)
@@ -65,6 +89,7 @@ class FolderSidebar(QWidget):
         self._folders: List[Path] = []
         self._root_dir: Optional[Path] = None
         self._collapsed_keys: Set[str] = set()
+        self._pinned_keys: List[str] = []
         self._sort_order: str = DEFAULT_SORT_ORDER
         self._is_selection_mode: bool = False
         self._selected_folders: Set[Path] = set()
@@ -236,6 +261,7 @@ class FolderSidebar(QWidget):
         self.tree_widget.customContextMenuRequested.connect(self._on_context_menu)
         self.tree_widget.installEventFilter(self)
         self.tree_widget.viewport().installEventFilter(self)
+        self.tree_widget.setItemDelegate(_FolderTreeDelegate(self))
 
         layout.addWidget(self.tree_widget, 1)
 
@@ -421,6 +447,9 @@ class FolderSidebar(QWidget):
 
         if folder is not None:
             # Custom Folder or Subfolder
+            is_pinned = self.is_folder_pinned(folder)
+            pin_label = "Unpin Folder" if is_pinned else "Pin Folder"
+            pin_act = menu.addAction(create_pin_icon(pinned=not is_pinned, color="#ff9f0a" if not is_pinned else "#8e8e93", size=14), pin_label)
             new_subfolder_act = menu.addAction(create_plus_icon("#8e8e93", size=14), "New Subfolder...")
             rename_act = menu.addAction(create_edit_icon("#8e8e93", size=14), "Rename Folder...")
             select_act = menu.addAction(create_checkbox_icon("#8e8e93", size=14), "Select...")
@@ -435,7 +464,9 @@ class FolderSidebar(QWidget):
             delete_act.setProperty("is_destructive", True)
 
             action = menu.exec(self.tree_widget.viewport().mapToGlobal(pos))
-            if action == new_subfolder_act:
+            if action == pin_act:
+                self.pin_folder_requested.emit(folder)
+            elif action == new_subfolder_act:
                 subfolder_name, ok = ModernInputDialog.get_text(
                     self,
                     "New Subfolder",
@@ -527,6 +558,14 @@ class FolderSidebar(QWidget):
     def set_collapsed_folders(self, collapsed_paths: List[str]) -> None:
         """Restore persisted collapsed folder relative paths without triggering save."""
         self._collapsed_keys = {str(p) for p in collapsed_paths if p}
+
+    def set_pinned_folders(self, pinned_keys: List[str]) -> None:
+        """Update ordered pinned folder relative paths (latest pin at index 0)."""
+        self._pinned_keys = [str(p) for p in pinned_keys if p]
+
+    def is_folder_pinned(self, folder: Path) -> bool:
+        """Return True if `folder` is currently pinned."""
+        return self._folder_key(folder) in self._pinned_keys
 
     def get_collapsed_folders(self) -> List[str]:
         """Return sorted list of currently collapsed folder keys."""
@@ -659,8 +698,13 @@ class FolderSidebar(QWidget):
         # Map Path -> QTreeWidgetItem to parent subfolders cleanly
         item_map: Dict[Path, QTreeWidgetItem] = {}
 
-        # Sort folders hierarchically across all nesting depths while keeping parents before children
-        sorted_folders = sort_folders(self._folders, sort_order=self._sort_order)
+        # Sort folders hierarchically across all nesting depths (pinned siblings first)
+        sorted_folders = sort_folders(
+            self._folders,
+            sort_order=self._sort_order,
+            pinned_keys=self._pinned_keys,
+            root_dir=self._root_dir,
+        )
 
         for folder in sorted_folders:
             item = QTreeWidgetItem([folder.name])

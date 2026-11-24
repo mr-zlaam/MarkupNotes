@@ -106,6 +106,7 @@ class MainWindow(QMainWindow):
         self.sidebar.select_all_notes_requested.connect(self._on_select_all_notes_requested)
         self.sidebar.folder_color_changed.connect(self._on_folder_color_changed)
         self.sidebar.folder_expansion_changed.connect(self._schedule_session_save)
+        self.sidebar.pin_folder_requested.connect(self._on_toggle_pin_folder)
 
         # 2. Middle: Note Cards List
         self.note_list = NoteListPanel(parent=self.splitter)
@@ -119,6 +120,7 @@ class MainWindow(QMainWindow):
         self.note_list.delete_note_requested.connect(self._on_delete_single_note)
         self.note_list.delete_notes_batch_requested.connect(self._on_delete_notes_batch)
         self.note_list.note_color_changed.connect(self._on_note_color_changed)
+        self.note_list.pin_note_requested.connect(self._on_toggle_pin_note)
 
         # 3. Middle-Right: Editor Canvas
         self.editor = EditorPanel(parent=self.splitter)
@@ -137,6 +139,7 @@ class MainWindow(QMainWindow):
         self.editor.word_wrap_toggled.connect(self._on_editor_word_wrap_toggled)
         self.editor.collapse_all_folders_requested.connect(self.sidebar.toggle_collapse_all_folders)
         self.editor.focus_received.connect(self._on_editor_focus_received)
+        self.editor.pin_active_note_requested.connect(self._on_toggle_pin_active_note)
 
         # 4. Far Right: Backup & Version History Panel
         self.backup_panel = BackupPanel(
@@ -270,6 +273,12 @@ class MainWindow(QMainWindow):
         alt_w_sc.setContext(Qt.ShortcutContext.WindowShortcut)
         alt_w_sc.activated.connect(self.editor.toggle_word_wrap)
         self._registered_shortcuts.append(alt_w_sc)
+
+        # Pin / Unpin Note or Folder (Alt+P)
+        alt_p_sc = QShortcut(QKeySequence("Alt+P"), self)
+        alt_p_sc.setContext(Qt.ShortcutContext.WindowShortcut)
+        alt_p_sc.activated.connect(self._on_alt_p_pressed)
+        self._registered_shortcuts.append(alt_p_sc)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         """Handle window-level keyboard navigation and shortcuts."""
@@ -559,6 +568,7 @@ class MainWindow(QMainWindow):
             self._applied_sort_order = sort_order
             self.sidebar.set_root_dir(self.storage.root_dir)
             self.sidebar.set_collapsed_folders(self.config.session.collapsed_folders)
+            self.sidebar.set_pinned_folders(self.config.general.pinned_folders)
             self.sidebar.set_folder_colors(self.config.appearance.folder_colors)
             self.note_list.set_note_colors(self.config.appearance.note_colors)
             folders = self.storage.get_folders(sort_order=sort_order)
@@ -760,10 +770,16 @@ class MainWindow(QMainWindow):
             self.editor.load_note(None)
 
     def _refresh_notes(self, preserve_path: Optional[str] = None, emit_selection: bool = True) -> None:
-        """Reload notes for the current folder using the active sort order."""
-        self._all_current_notes = self.storage.list_notes(
+        """Reload notes for the current folder using active pin order and sort order."""
+        raw_notes = self.storage.list_notes(
             self._current_folder,
             sort_order=self._get_sort_order(),
+        )
+        self._all_current_notes = sort_notes(
+            raw_notes,
+            sort_order=self._get_sort_order(),
+            pinned_keys=self.config.general.pinned_notes,
+            root_dir=self.storage.root_dir,
         )
         self._apply_note_list_view(preserve_path=preserve_path, emit_selection=emit_selection)
 
@@ -771,7 +787,57 @@ class MainWindow(QMainWindow):
         """Update or insert a note inside `_all_current_notes` without rescanning disk."""
         updated_list = [n for n in self._all_current_notes if n.path not in (old_path, updated_note.path)]
         updated_list.append(updated_note)
-        self._all_current_notes = sort_notes(updated_list, sort_order=self._get_sort_order())
+        self._all_current_notes = sort_notes(
+            updated_list,
+            sort_order=self._get_sort_order(),
+            pinned_keys=self.config.general.pinned_notes,
+            root_dir=self.storage.root_dir,
+        )
+
+    def _on_toggle_pin_note(self, note: Note) -> None:
+        """Toggle pin state for `note` and move latest pin to the top of the list."""
+        rel_key = self._serialize_workspace_path(note.path)
+        if not rel_key:
+            return
+        self.config_manager.toggle_pin_note(rel_key)
+        self._all_current_notes = sort_notes(
+            self._all_current_notes,
+            sort_order=self._get_sort_order(),
+            pinned_keys=self.config.general.pinned_notes,
+            root_dir=self.storage.root_dir,
+        )
+        self._apply_note_list_view(preserve_path=str(note.path), emit_selection=False)
+
+    def _on_toggle_pin_active_note(self) -> None:
+        """Toggle pin state for the currently open or selected note."""
+        target = self._current_note or self.note_list.get_selected_note()
+        if target is not None:
+            self._on_toggle_pin_note(target)
+
+    def _on_toggle_pin_folder(self, folder: Path) -> None:
+        """Toggle pin state for `folder` and keep latest pin on top within its level."""
+        rel_key = self._serialize_workspace_path(folder)
+        if not rel_key:
+            return
+        self.config_manager.toggle_pin_folder(rel_key)
+        self.sidebar.set_pinned_folders(self.config.general.pinned_folders)
+        sort_order = self._get_sort_order()
+        self.sidebar.set_folders(
+            self.storage.get_folders(sort_order=sort_order),
+            current_selection=self._current_folder,
+            sort_order=sort_order,
+        )
+
+    def _on_alt_p_pressed(self) -> None:
+        """Pin/unpin focused folder if sidebar tree has focus, else pin/unpin active note."""
+        if self.sidebar.tree_widget.hasFocus():
+            current_item = self.sidebar.tree_widget.currentItem()
+            if current_item is not None:
+                folder = current_item.data(0, Qt.ItemDataRole.UserRole)
+                if folder is not None:
+                    self._on_toggle_pin_folder(folder)
+                    return
+        self._on_toggle_pin_active_note()
 
     def _on_folder_selected(self, folder: Optional[Path]) -> None:
         self.flush_pending_save()
@@ -937,6 +1003,10 @@ class MainWindow(QMainWindow):
         renamed_path = self.storage.rename_note_file(current_path, sanitized_title)
         if renamed_path != current_path:
             self._transfer_note_color(str(current_path), str(renamed_path))
+            self.config_manager.transfer_note_pin(
+                self._serialize_workspace_path(current_path),
+                self._serialize_workspace_path(renamed_path),
+            )
             self.editor.rename_cached_note(current_path, renamed_path)
             current_content = self.editor.get_content()
             self._current_note = Note.from_memory(renamed_path, current_content, time.time())
@@ -1013,6 +1083,11 @@ class MainWindow(QMainWindow):
             if renamed_folder is not None:
                 self.editor.invalidate_folder_cache(folder_path)
                 self._transfer_folder_color(folder_path.name, new_name)
+                self.config_manager.transfer_folder_pin(
+                    self._serialize_workspace_path(folder_path),
+                    self._serialize_workspace_path(renamed_folder),
+                )
+                self.sidebar.set_pinned_folders(self.config.general.pinned_folders)
                 if self._current_folder == folder_path:
                     self._current_folder = renamed_folder
                 self._update_watcher_paths()
@@ -1050,6 +1125,8 @@ class MainWindow(QMainWindow):
             )
         if confirmed:
             self.config_manager.set_folder_color(folder_path.name, None)
+            self.config_manager.remove_folder_pin(self._serialize_workspace_path(folder_path))
+            self.sidebar.set_pinned_folders(self.config.general.pinned_folders)
             self.editor.invalidate_folder_cache(folder_path)
             self.storage.delete_folder(folder_path)
             if self._current_folder == folder_path:
@@ -1081,7 +1158,9 @@ class MainWindow(QMainWindow):
         if confirmed:
             for f in folders:
                 self.config_manager.set_folder_color(f.name, None)
+                self.config_manager.remove_folder_pin(self._serialize_workspace_path(f))
                 self.editor.invalidate_folder_cache(f)
+            self.sidebar.set_pinned_folders(self.config.general.pinned_folders)
             self.storage.delete_folders_batch(folders)
             if self._current_folder in folders:
                 self._current_folder = None
@@ -1110,6 +1189,10 @@ class MainWindow(QMainWindow):
             renamed_path = self.storage.rename_note_file(note.path, new_title)
             if renamed_path != note.path:
                 self._transfer_note_color(str(note.path), str(renamed_path))
+                self.config_manager.transfer_note_pin(
+                    self._serialize_workspace_path(note.path),
+                    self._serialize_workspace_path(renamed_path),
+                )
                 self.editor.rename_cached_note(note.path, renamed_path)
 
             updated_note = Note.from_file(renamed_path)
@@ -1137,6 +1220,7 @@ class MainWindow(QMainWindow):
             )
         if confirmed:
             self.config_manager.set_note_color(str(note.path), None)
+            self.config_manager.remove_note_pin(self._serialize_workspace_path(note.path))
             self.editor.invalidate_note_cache(note.path)
             self.storage.delete_note(note.path)
             if self._current_note and self._current_note.path == note.path:

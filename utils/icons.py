@@ -356,6 +356,17 @@ def create_collapse_all_icon(
     return render_lucide_icon(name, color=color, size=size, stroke_width=stroke_width)
 
 
+def create_pin_icon(
+    pinned: bool = True,
+    color: str = "#8e8e93",
+    size: int = 14,
+    stroke_width: float = 1.6,
+) -> QIcon:
+    """Generate a crisp vector pin (or unpin) icon."""
+    name = "pin" if pinned else "pin-off"
+    return render_lucide_icon(name, color=color, size=size, stroke_width=stroke_width)
+
+
 def create_history_icon(color: str = "#8e8e93", size: int = 14, stroke_width: float = 1.35) -> QIcon:
     """Generate a clean vector history / clock-rewind icon."""
     return render_lucide_icon("history", color=color, size=size, stroke_width=stroke_width)

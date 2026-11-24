@@ -54,6 +54,8 @@ LUCIDE_SVGS: Dict[str, str] = {
     "code": '<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>',
     "copy-minus": '<line x1="11" x2="17" y1="10" y2="10"/><rect width="14" height="14" x="7" y="3" rx="2"/><path d="M3 8v11a2 2 0 0 0 2 2h11"/>',
     "copy-plus": '<line x1="11" x2="17" y1="10" y2="10"/><line x1="14" x2="14" y1="7" y2="13"/><rect width="14" height="14" x="7" y="3" rx="2"/><path d="M3 8v11a2 2 0 0 0 2 2h11"/>',
+    "pin": '<path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/>',
+    "pin-off": '<path d="M12 17v5"/><path d="M15 9.34V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H7.89"/><path d="m2 2 20 20"/><path d="M9 9v1.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h11"/>',
 }
 
 _ICON_CACHE: Dict[Tuple[str, str, int, float, Optional[str], Optional[float]], QIcon] = {}
