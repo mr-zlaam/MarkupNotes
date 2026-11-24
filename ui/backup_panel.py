@@ -225,7 +225,7 @@ class BackupPanel(QWidget):
 
         self._auto_backup_timer = QTimer(self)
         self._auto_backup_timer.setSingleShot(True)
-        self._auto_backup_timer.setInterval(2500)
+        self._auto_backup_timer.setInterval(self._get_auto_backup_delay_ms())
         self._auto_backup_timer.timeout.connect(self._on_auto_backup_timer_fired)
 
         self.setObjectName("BackupPanel")
@@ -674,9 +674,38 @@ class BackupPanel(QWidget):
             self.lbl_sync_status.setText(f"Sync failed: {message}")
             self.lbl_sync_status.setStyleSheet("color: #ff453a; font-size: 10px;")
 
+    def _get_auto_backup_delay_ms(self) -> int:
+        """Return the configured auto-backup debounce delay in milliseconds."""
+        if self.config_manager:
+            return self.config_manager.get_auto_backup_delay_ms()
+        return 2500
+
     def is_auto_backup_enabled(self) -> bool:
         """Check if automatic backup on edit is active."""
         return self.toggle_auto_backup.isChecked()
+
+    def sync_auto_backup_settings(self) -> None:
+        """Synchronize auto-backup toggle state and debounce delay from ConfigManager."""
+        if not self.config_manager:
+            return
+        enabled = self.config_manager.get_auto_backup()
+        was_enabled = self.toggle_auto_backup.isChecked()
+        if was_enabled != enabled:
+            self.toggle_auto_backup.blockSignals(True)
+            self.toggle_auto_backup.setChecked(enabled)
+            self.toggle_auto_backup.blockSignals(False)
+
+        delay_ms = self._get_auto_backup_delay_ms()
+        self._auto_backup_timer.setInterval(delay_ms)
+
+        if not enabled:
+            self._auto_backup_timer.stop()
+        elif self._auto_backup_timer.isActive():
+            self._auto_backup_timer.start(delay_ms)
+        elif not was_enabled and self.git_manager.is_repo():
+            status = self.git_manager.get_status()
+            if not status.is_clean or status.ahead > 0:
+                self.schedule_auto_backup()
 
     def _on_auto_backup_toggled(self, enabled: bool) -> None:
         """Handle user toggling automatic backup."""
@@ -690,12 +719,14 @@ class BackupPanel(QWidget):
             self._auto_backup_timer.stop()
 
     def schedule_auto_backup(self) -> None:
-        """Schedule debounced background sync (2.5s) if automatic backup is enabled."""
+        """Schedule debounced background sync using configured delay if automatic backup is enabled."""
         if not self.toggle_auto_backup.isChecked():
             return
         if not self.git_manager.is_repo():
             return
-        self._auto_backup_timer.start(2500)
+        delay_ms = self._get_auto_backup_delay_ms()
+        self._auto_backup_timer.setInterval(delay_ms)
+        self._auto_backup_timer.start(delay_ms)
 
     def _on_auto_backup_timer_fired(self) -> None:
         """Debounced auto-backup timer expired; trigger sync if dirty or ahead."""

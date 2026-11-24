@@ -95,9 +95,17 @@ class TestSettingsDialog(unittest.TestCase):
         dialog = ModernSettingsDialog(self.config_manager)
         dialog.show()
 
-        # Find "Restore Factory Defaults" row
+        # Find "Restore Factory Defaults" row and verify only one exists
+        from PyQt6.QtWidgets import QPushButton
+
         reset_rows = [r for r in dialog.setting_rows if "Restore Factory Defaults" in r.title_text]
-        self.assertTrue(len(reset_rows) >= 1)
+        self.assertEqual(len(reset_rows), 1)
+        reset_buttons = [
+            b
+            for b in dialog.card.findChildren(QPushButton)
+            if b.text() in ("Reset to Defaults", "Reset All Settings")
+        ]
+        self.assertEqual(len(reset_buttons), 1)
 
         # Modify a setting
         self.config_manager.update_editor(font_size=28)
@@ -108,9 +116,9 @@ class TestSettingsDialog(unittest.TestCase):
         dialog._rebuild_pages()
         self.assertEqual(self.config_manager.settings.editor.font_size, 12)
 
-        # Verify rows still exist after rebuild
+        # Verify single row still exists after rebuild
         reset_rows_after = [r for r in dialog.setting_rows if "Restore Factory Defaults" in r.title_text]
-        self.assertTrue(len(reset_rows_after) >= 1)
+        self.assertEqual(len(reset_rows_after), 1)
         dialog.close()
 
     def test_toggle_switch_widget(self) -> None:

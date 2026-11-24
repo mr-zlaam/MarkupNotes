@@ -62,6 +62,7 @@ class AppearanceConfig:
 @dataclass
 class BackupConfig:
     auto_backup: bool = False
+    auto_backup_delay_ms: int = 2500
     backup_interval_min: int = 15
     github_repo_url: str = ""
 
@@ -140,6 +141,10 @@ class AppSettings:
         bak_data = data.get("backup", {})
         backup = BackupConfig(
             auto_backup=bool(bak_data.get("auto_backup", False)),
+            auto_backup_delay_ms=max(
+                1000,
+                min(600000, int(bak_data.get("auto_backup_delay_ms", 2500))),
+            ),
             backup_interval_min=int(bak_data.get("backup_interval_min", 15)),
             github_repo_url=str(bak_data.get("github_repo_url", "")),
         )
@@ -279,6 +284,16 @@ class ConfigManager:
     def get_auto_backup(self) -> bool:
         """Get automatic backup setting."""
         return self.settings.backup.auto_backup
+
+    def set_auto_backup_delay_ms(self, delay_ms: int) -> None:
+        """Update and save automatic backup debounce delay in milliseconds."""
+        clamped = max(1000, min(600000, int(delay_ms)))
+        self.settings.backup.auto_backup_delay_ms = clamped
+        self.save()
+
+    def get_auto_backup_delay_ms(self) -> int:
+        """Get clamped automatic backup debounce delay in milliseconds."""
+        return max(1000, min(600000, int(self.settings.backup.auto_backup_delay_ms)))
 
     def update_editor(
         self,

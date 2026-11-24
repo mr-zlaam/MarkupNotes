@@ -516,26 +516,6 @@ class ModernSettingsDialog(QDialog):
         open_cfg_btn.clicked.connect(self._open_config_file)
         footer_layout.addWidget(open_cfg_btn)
 
-        reset_btn = QPushButton("Reset to Defaults", parent=self.card)
-        reset_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        reset_btn.setStyleSheet("""
-            QPushButton {
-                background-color: transparent;
-                color: #ff6961;
-                border: 1px solid #4a2828;
-                border-radius: 6px;
-                padding: 6px 12px;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background-color: #381e1e;
-                color: #ff8580;
-                border-color: #6a3434;
-            }
-        """)
-        reset_btn.clicked.connect(self._reset_to_defaults)
-        footer_layout.addWidget(reset_btn)
-
         footer_layout.addStretch()
 
         done_btn = QPushButton("Done", parent=self.card)
@@ -836,6 +816,17 @@ class ModernSettingsDialog(QDialog):
         layout.addStretch()
         return scroll
 
+    AUTO_BACKUP_DELAY_OPTIONS = [
+        ("1 second", 1000),
+        ("2.5 seconds (Default)", 2500),
+        ("5 seconds", 5000),
+        ("10 seconds", 10000),
+        ("15 seconds", 15000),
+        ("30 seconds", 30000),
+        ("1 minute", 60000),
+        ("5 minutes", 300000),
+    ]
+
     def _build_backup_page(self) -> QWidget:
         """Construct the Git & Cloud Backup settings page."""
         scroll, layout = self._create_scroll_page()
@@ -848,7 +839,26 @@ class ModernSettingsDialog(QDialog):
         layout.addWidget(r1)
         self.setting_rows.append(r1)
 
-        # 2. Git Status Info
+        # 2. Auto Backup Delay
+        delay_combo = ModernComboBox()
+        for label, _ in self.AUTO_BACKUP_DELAY_OPTIONS:
+            delay_combo.addItem(label)
+        cur_delay = getattr(cfg.backup, "auto_backup_delay_ms", 2500)
+        closest_delay_idx = min(
+            range(len(self.AUTO_BACKUP_DELAY_OPTIONS)),
+            key=lambda i: abs(self.AUTO_BACKUP_DELAY_OPTIONS[i][1] - cur_delay),
+        )
+        delay_combo.setCurrentIndex(closest_delay_idx)
+        delay_combo.currentIndexChanged.connect(self._on_auto_backup_delay_changed)
+        r_delay = SettingRow(
+            "Auto-Backup Delay",
+            "Wait time after editing stops before committing and syncing changes",
+            delay_combo,
+        )
+        layout.addWidget(r_delay)
+        self.setting_rows.append(r_delay)
+
+        # 3. Git Status Info
         notes_git_dir = get_default_notes_dir() / ".git"
         git_status_text = "Initialized (Active)" if notes_git_dir.exists() else "Not initialized"
         status_lbl = QLabel(git_status_text)
@@ -879,34 +889,6 @@ class ModernSettingsDialog(QDialog):
         r2 = SettingRow("Keyboard Shortcuts Cheatsheet", "Complete reference of all editor and navigation keybindings", shortcuts_btn)
         layout.addWidget(r2)
         self.setting_rows.append(r2)
-
-        # 3. Factory Reset Option
-        about_reset_btn = QPushButton("Reset All Settings")
-        about_reset_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        about_reset_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #2e1a1a;
-                color: #ff8580;
-                border: 1px solid #5a2828;
-                border-radius: 6px;
-                padding: 6px 14px;
-                font-size: 12px;
-                font-weight: 600;
-            }
-            QPushButton:hover {
-                background-color: #3e2222;
-                color: #ffa09c;
-                border-color: #7a3535;
-            }
-        """)
-        about_reset_btn.clicked.connect(self._reset_to_defaults)
-        r3 = SettingRow(
-            "Restore Factory Defaults",
-            "Clear all custom settings and revert to initial installation defaults",
-            about_reset_btn,
-        )
-        layout.addWidget(r3)
-        self.setting_rows.append(r3)
 
         layout.addStretch()
         return scroll
@@ -993,6 +975,13 @@ class ModernSettingsDialog(QDialog):
     def _on_auto_backup_toggled(self, checked: bool) -> None:
         self.config_manager.set_auto_backup(checked)
         self.settings_updated.emit()
+
+    def _on_auto_backup_delay_changed(self, index: int) -> None:
+        """Persist automatic backup debounce delay and notify listeners."""
+        if 0 <= index < len(self.AUTO_BACKUP_DELAY_OPTIONS):
+            _, delay_ms = self.AUTO_BACKUP_DELAY_OPTIONS[index]
+            self.config_manager.set_auto_backup_delay_ms(delay_ms)
+            self.settings_updated.emit()
 
     def _reveal_notes_folder(self) -> None:
         """Open the notes directory in system file manager."""

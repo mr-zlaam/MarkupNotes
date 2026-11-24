@@ -382,6 +382,8 @@ class MainWindow(QMainWindow):
         self._apply_ui_scale(self.config.general.ui_scale)
         self.sidebar.set_folder_colors(self.config.appearance.folder_colors)
         self.note_list.set_note_colors(self.config.appearance.note_colors)
+        if hasattr(self, "backup_panel"):
+            self.backup_panel.sync_auto_backup_settings()
 
     def restore_default_layout(self) -> None:
         """Restore all panels, splitters, and geometries to initial factory state."""
