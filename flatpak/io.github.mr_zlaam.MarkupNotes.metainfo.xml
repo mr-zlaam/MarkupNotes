@@ -62,6 +62,47 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.5.0" date="2026-11-25">
+      <description>
+        <p>New Features:</p>
+        <ul>
+          <li>Added Ctrl+V image pasting and drag-and-drop image insertion with live inline Markdown image previews.</li>
+          <li>Added note and folder pinning (Alt+P) with pin protection guards and latest-pin-first sorting.</li>
+          <li>Added workspace reload button and Ctrl+R / F5 shortcuts to sync external file changes across multiple instances.</li>
+          <li>Added clickable Table of Contents links (Markdown anchors and EPUB-style relative HTML links) to scroll directly to target headings.</li>
+          <li>Added session restoration for last active folder, note, cursor, and scroll position, with an on-demand load overlay for very large files (2 MB and larger).</li>
+          <li>Added customization and settings sync via .markup-notes during GitHub backup with conflict resolution.</li>
+          <li>Added collapse/expand all folders toggle (Ctrl+Left), active note parent folder auto-reveal, F2 rename shortcut, and Linux natural sorting.</li>
+        </ul>
+        <p>Performance and Bug Fixes:</p>
+        <ul>
+          <li>Improved large-note editing and switching performance with an LRU document cache, async background loading with spinner overlay, lazy note listing, and delta-based undo/redo.</li>
+          <li>Added scroll-beyond-last-line padding, automatic horizontal scroll reset for unwrapped notes, and preserved folder focus when clicking empty sidebar space.</li>
+          <li>Preserved Markdown syntax when applying text colors or highlights, dimmed checked task highlights, and fixed cascading folder selection and HiDPI GitHub icon rendering.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.5.0" date="2026-11-25">
+      <description>
+        <p>New Features:</p>
+        <ul>
+          <li>Added drag-and-drop, cut/copy/paste, replace confirmation modal, and Ctrl+Z undo for organizing notes and folders, plus external OS file drop support (including Wayland).</li>
+          <li>Added Ctrl+V image pasting and drag-and-drop image insertion with live inline Markdown image previews.</li>
+          <li>Added note and folder pinning (Alt+P) with pin protection guards and latest-pin-first sorting.</li>
+          <li>Added workspace reload button and Ctrl+R / F5 shortcuts to sync external file changes across multiple instances.</li>
+          <li>Added clickable Table of Contents links (Markdown anchors and EPUB-style relative HTML links) to scroll directly to target headings.</li>
+          <li>Added session restoration for last active folder, note, cursor, and scroll position, with an on-demand load overlay for very large files (2 MB and larger).</li>
+          <li>Added customization and settings sync via .markup-notes during GitHub backup with conflict resolution.</li>
+          <li>Added collapse/expand all folders toggle (Ctrl+Left), active note parent folder auto-reveal, F2 rename shortcut, and Linux natural sorting.</li>
+        </ul>
+        <p>Performance and Bug Fixes:</p>
+        <ul>
+          <li>Improved large-note editing and switching performance with an LRU document cache, async background loading with spinner overlay, lazy note listing, and delta-based undo/redo.</li>
+          <li>Added scroll-beyond-last-line padding, automatic horizontal scroll reset for unwrapped notes, and preserved folder focus when clicking empty sidebar space.</li>
+          <li>Preserved Markdown syntax when applying text colors or highlights, dimmed checked task highlights, and fixed cascading folder selection and HiDPI GitHub icon rendering.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.4.0" date="2026-11-19">
       <description>
         <p>New Features:</p>

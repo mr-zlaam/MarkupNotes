@@ -1,6 +1,6 @@
 [project]
 name = "markup-notes"
-version = "0.4.0"
+version = "0.5.0"
 description = "A fast, lightweight, native Markdown note-taking app for Linux (and Electron haters)."
 readme = "README.md"
 requires-python = ">=3.10"
