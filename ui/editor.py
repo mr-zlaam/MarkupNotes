@@ -11,11 +11,14 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from PyQt6.QtCore import QEvent, QMimeData, QPoint, QPointF, QRect, QRectF, QTimer, QUrl, Qt, pyqtSignal
 from PyQt6.QtGui import (
+    QAction,
     QBrush,
     QColor,
+    QContextMenuEvent,
     QDesktopServices,
     QFont,
     QKeyEvent,
+    QKeySequence,
     QMouseEvent,
     QPainter,
     QPainterPath,
@@ -60,6 +63,7 @@ from utils.video_engine import (
 )
 from utils.touch import TouchScrollTracker, is_touch_event
 from utils.transient_scrollbar import TransientScrollBarController
+from utils.undo_manager import PlainTextUndoManager
 from utils.icons import (
     create_backup_icon,
     create_export_icon,
@@ -213,6 +217,13 @@ class MarkdownEditor(QTextEdit):
         bf.setLineHeight(120.0, QTextBlockFormat.LineHeightTypes.ProportionalHeight.value)
         cur.setBlockFormat(bf)
         self.setTextCursor(cur)
+
+        # Decouple plain-text Undo/Redo from Qt layout mutations (_update_block_margins)
+        self.document().setUndoRedoEnabled(False)
+        self.undo_manager = PlainTextUndoManager()
+        self._applying_undo_redo: bool = False
+        self._resetting_text: bool = False
+        self._cleaning_empty_tag: bool = False
 
         # Attach cursor-aware Obsidian syntax highlighter
         self.highlighter = MarkdownHighlighter(self.document())
@@ -1322,9 +1333,100 @@ class MarkdownEditor(QTextEdit):
         self._update_block_margins()
 
     def setPlainText(self, text: str) -> None:
-        """Set editor plain text and synchronously apply line height and block margins."""
-        super().setPlainText(text)
-        self._update_blockquote_margins()
+        """Set editor plain text, reset undo history, and synchronously apply line height and block margins."""
+        self._margin_timer.stop()
+        self._resetting_text = True
+        try:
+            super().setPlainText(text)
+            self._update_blockquote_margins()
+            cur = self.textCursor()
+            self.undo_manager.reset(self.toPlainText(), cur.anchor(), cur.position())
+        finally:
+            self._resetting_text = False
+
+    def canUndo(self) -> bool:
+        """Return True if at least one plain-text undo step is available."""
+        return self.undo_manager.can_undo
+
+    def canRedo(self) -> bool:
+        """Return True if at least one plain-text redo step is available."""
+        return self.undo_manager.can_redo
+
+    def undo(self) -> None:
+        """Restore the previous plain-text state and exact cursor/selection without layout pollution."""
+        step = self.undo_manager.undo()
+        if step is not None:
+            self._apply_history_step(step)
+
+    def redo(self) -> None:
+        """Re-apply the next undone plain-text state and exact cursor/selection."""
+        step = self.undo_manager.redo()
+        if step is not None:
+            self._apply_history_step(step)
+
+    def _apply_history_step(self, step: Tuple[int, int, str, int, int]) -> None:
+        """Apply a reversible plain-text delta to QTextDocument and refresh margins and highlights."""
+        replace_start, replace_end, replacement, target_anchor, target_pos = step
+        self._margin_timer.stop()
+        self._applying_undo_redo = True
+        try:
+            doc = self.document()
+            edit_c = QTextCursor(doc)
+            edit_c.setPosition(replace_start)
+            if replace_end > replace_start:
+                edit_c.setPosition(replace_end, QTextCursor.MoveMode.KeepAnchor)
+            edit_c.insertText(replacement)
+
+            doc_len = max(0, doc.characterCount() - 1)
+            clamped_anchor = max(0, min(doc_len, target_anchor))
+            clamped_pos = max(0, min(doc_len, target_pos))
+
+            target_c = QTextCursor(doc)
+            target_c.setPosition(clamped_anchor)
+            if clamped_pos != clamped_anchor:
+                target_c.setPosition(clamped_pos, QTextCursor.MoveMode.KeepAnchor)
+            self.setTextCursor(target_c)
+
+            self._update_block_margins()
+            self._margin_timer.stop()
+            self.highlighter.active_block_number = target_c.block().blockNumber()
+            self.highlighter.cursor_pos_in_block = target_c.positionInBlock()
+            changed = self.highlighter.refresh_regions()
+            for b_num in changed:
+                b = doc.findBlockByNumber(b_num)
+                if b.isValid():
+                    self.highlighter.rehighlightBlock(b)
+            b_cur = target_c.block()
+            if b_cur.isValid():
+                self.highlighter.rehighlightBlock(b_cur)
+            self.ensureCursorVisible()
+            self.viewport().update()
+        finally:
+            self._applying_undo_redo = False
+
+    def contextMenuEvent(self, event: QContextMenuEvent) -> None:
+        """Wire right-click menu Undo/Redo actions to the plain-text undo manager."""
+        menu = self.createStandardContextMenu(event.pos())
+        undo_seq = QKeySequence(QKeySequence.StandardKey.Undo)
+        redo_seq = QKeySequence(QKeySequence.StandardKey.Redo)
+        for act in list(menu.actions()):
+            raw_text = act.text().replace("&", "")
+            shortcuts = act.shortcuts()
+            if raw_text.startswith("Undo") or undo_seq in shortcuts:
+                undo_act = QAction("Undo", menu)
+                undo_act.setShortcut(undo_seq)
+                undo_act.setEnabled(self.undo_manager.can_undo)
+                undo_act.triggered.connect(self.undo)
+                menu.insertAction(act, undo_act)
+                menu.removeAction(act)
+            elif raw_text.startswith("Redo") or redo_seq in shortcuts:
+                redo_act = QAction("Redo", menu)
+                redo_act.setShortcut(redo_seq)
+                redo_act.setEnabled(self.undo_manager.can_redo)
+                redo_act.triggered.connect(self.redo)
+                menu.insertAction(act, redo_act)
+                menu.removeAction(act)
+        menu.exec(event.globalPos())
 
     def insertFromMimeData(self, source: QMimeData) -> None:
         """Ensure pasted content is always inserted as clean Markdown / plain text in a single edit block."""
@@ -1341,9 +1443,16 @@ class MarkdownEditor(QTextEdit):
 
     def _on_contents_changed(self) -> None:
         """Recompute table, math, and mermaid regions on text content modification."""
-        if not self._updating_margins:
+        if not self._updating_margins and not self._resetting_text:
             self._margin_timer.start()
         cursor = self.textCursor()
+        if not self._updating_margins and not self._resetting_text and not self._applying_undo_redo:
+            self.undo_manager.record_change(
+                self.toPlainText(),
+                cursor.anchor(),
+                cursor.position(),
+                force_merge=self._cleaning_empty_tag,
+            )
         self.highlighter.active_block_number = cursor.block().blockNumber()
         self.highlighter.cursor_pos_in_block = cursor.positionInBlock()
         changed = self.highlighter.refresh_regions()
@@ -1361,7 +1470,7 @@ class MarkdownEditor(QTextEdit):
         new_pos_in_block = cursor.positionInBlock()
 
         # Prevent caret from ever resting strictly inside invisible HTML color/mark tags
-        if not cursor.hasSelection():
+        if not cursor.hasSelection() and not self._applying_undo_redo and not self._resetting_text:
             b_text = new_block.text()
             if "<" in b_text or "mark" in b_text or "span" in b_text:
                 # Remove empty tag pairs automatically
@@ -1371,7 +1480,11 @@ class MarkdownEditor(QTextEdit):
                     clean_c = QTextCursor(self.document())
                     clean_c.setPosition(new_block.position() + es)
                     clean_c.setPosition(new_block.position() + ee, QTextCursor.MoveMode.KeepAnchor)
-                    clean_c.removeSelectedText()
+                    self._cleaning_empty_tag = True
+                    try:
+                        clean_c.removeSelectedText()
+                    finally:
+                        self._cleaning_empty_tag = False
                     b_text = new_block.text()
                     new_pos_in_block = self.textCursor().positionInBlock()
 
@@ -1383,6 +1496,11 @@ class MarkdownEditor(QTextEdit):
                         snap_c.setPosition(new_block.position() + target_p)
                         self.setTextCursor(snap_c)
                         return
+
+        if not self._applying_undo_redo and not self._resetting_text:
+            cur_now = self.textCursor()
+            if self.toPlainText() == self.undo_manager.current_text:
+                self.undo_manager.update_cursor(cur_now.anchor(), cur_now.position())
 
         old_block_num = self.highlighter.active_block_number
         old_pos_in_block = getattr(self.highlighter, "cursor_pos_in_block", -1)
@@ -2716,6 +2834,30 @@ class MarkdownEditor(QTextEdit):
                 self.toggle_word_wrap()
                 event.accept()
                 return
+
+        # Standard Undo / Redo shortcuts (handled via PlainTextUndoManager)
+        if event.matches(QKeySequence.StandardKey.Undo) or (
+            has_ctrl and not has_alt and not has_shift and event.key() == Qt.Key.Key_Z
+        ):
+            if self.slash_palette.isVisible():
+                self.slash_palette.hide()
+            self.undo()
+            event.accept()
+            return
+
+        if event.matches(QKeySequence.StandardKey.Redo) or (
+            has_ctrl
+            and not has_alt
+            and (
+                (not has_shift and event.key() == Qt.Key.Key_Y)
+                or (has_shift and event.key() == Qt.Key.Key_Z)
+            )
+        ):
+            if self.slash_palette.isVisible():
+                self.slash_palette.hide()
+            self.redo()
+            event.accept()
+            return
 
         # Ctrl-based productivity and markdown formatting shortcuts
         if has_ctrl and not has_alt:
