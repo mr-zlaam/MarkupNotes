@@ -131,14 +131,11 @@ class TestFolderIconsAndContextMenus(unittest.TestCase):
         QApplication.sendEvent(sidebar.tree_widget.viewport(), press_event)
         QApplication.sendEvent(sidebar.tree_widget.viewport(), release_event)
 
-        # Must deselect custom folder and select All Notes
-        self.assertEqual(sidebar.tree_widget.currentItem().text(0), "All Notes")
-        self.assertIsNone(selected_folders[-1])
-
-        # Reselect custom folder and test right click in empty space
-        sidebar.tree_widget.setCurrentItem(custom_item)
+        # Must preserve custom folder focus instead of switching to All Notes
         self.assertEqual(sidebar.tree_widget.currentItem().text(0), "ActiveFolder")
+        self.assertEqual(selected_folders[-1], folder)
 
+        # Test right click in empty space also preserves custom folder focus
         r_press = QMouseEvent(
             QEvent.Type.MouseButtonPress,
             QPointF(50.0, 350.0),
@@ -147,8 +144,8 @@ class TestFolderIconsAndContextMenus(unittest.TestCase):
             Qt.KeyboardModifier.NoModifier,
         )
         QApplication.sendEvent(sidebar.tree_widget.viewport(), r_press)
-        self.assertEqual(sidebar.tree_widget.currentItem().text(0), "All Notes")
-        self.assertIsNone(selected_folders[-1])
+        self.assertEqual(sidebar.tree_widget.currentItem().text(0), "ActiveFolder")
+        self.assertEqual(selected_folders[-1], folder)
 
         sidebar.deleteLater()
 

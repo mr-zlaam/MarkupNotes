@@ -239,6 +239,7 @@ class MarkdownEditor(QTextEdit):
         self.undo_manager = PlainTextUndoManager()
         self._applying_undo_redo: bool = False
         self._resetting_text: bool = False
+        self._update_bottom_overscroll_margin()
         self._cleaning_empty_tag: bool = False
         self._pending_text_mutation: bool = False
         self._pending_changes: List[Tuple[int, int, str]] = []
@@ -1518,6 +1519,7 @@ class MarkdownEditor(QTextEdit):
         self._resetting_text = True
         try:
             super().setPlainText(text)
+            self._update_bottom_overscroll_margin()
             cur = self.textCursor()
             self._last_block_count = self.document().blockCount()
             self.highlighter.active_block_number = cur.block().blockNumber()
@@ -3023,6 +3025,29 @@ class MarkdownEditor(QTextEdit):
 
         self._scrollbar_drag = None
         super().mouseReleaseEvent(event)
+
+    def _update_bottom_overscroll_margin(self) -> None:
+        """Keep half-viewport bottom padding so the last line can be scrolled to the center."""
+        vp_h = self.viewport().height()
+        target_margin = float(max(0, vp_h // 2))
+        root_frame = self.document().rootFrame()
+        frame_fmt = root_frame.frameFormat()
+        if abs(frame_fmt.bottomMargin() - target_margin) < 1.0:
+            return
+        prev_reset = self._resetting_text
+        prev_blocked = self.blockSignals(True)
+        self._resetting_text = True
+        try:
+            frame_fmt.setBottomMargin(target_margin)
+            root_frame.setFrameFormat(frame_fmt)
+        finally:
+            self._resetting_text = prev_reset
+            self.blockSignals(prev_blocked)
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        """Update bottom overscroll margin whenever the editor viewport resizes."""
+        super().resizeEvent(event)
+        self._update_bottom_overscroll_margin()
 
     def leaveEvent(self, event: QEvent) -> None:
         """Clear button and card hover states when the cursor leaves the editor."""

@@ -317,10 +317,7 @@ class FolderSidebar(QWidget):
                 self.folder_selected.emit(None)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        """Handle clicking outside the tree widget in sidebar margins."""
-        if not self._is_selection_mode:
-            if event.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton):
-                self.select_all_notes()
+        """Handle clicking outside the tree widget in sidebar margins without changing folder focus."""
         super().mousePressEvent(event)
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
@@ -334,9 +331,12 @@ class FolderSidebar(QWidget):
                 if watched == self.tree_widget:
                     pos = self.tree_widget.viewport().mapFromParent(pos)
                 item = self.tree_widget.itemAt(pos)
-                if item is None:
-                    if event.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton):
-                        self.select_all_notes()
+                if item is None and event.button() in (
+                    Qt.MouseButton.LeftButton,
+                    Qt.MouseButton.RightButton,
+                ):
+                    # Preserve current folder focus when clicking empty space
+                    return True
 
         if (
             watched in (self.tree_widget, self.tree_widget.viewport())
@@ -430,8 +430,7 @@ class FolderSidebar(QWidget):
         menu = ModernContextMenu(self)
 
         if item is None:
-            # Right-click in empty space below folders: ensure All Notes is selected
-            self.select_all_notes()
+            # Right-click in empty space: keep current folder focus, create root parent folder
             new_folder_act = menu.addAction(create_plus_icon("#8e8e93", size=14), "New Folder...")
             select_act = menu.addAction(create_checkbox_icon("#8e8e93", size=14), "Select Notes...")
 
