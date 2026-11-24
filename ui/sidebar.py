@@ -386,8 +386,10 @@ class FolderSidebar(QWidget):
         self.tree_widget.setIndentation(16)
         self.tree_widget.setAnimated(True)
         self.tree_widget.setIconSize(QSize(18, 18))
-        self.tree_widget.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.tree_widget.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
+        self.tree_widget.setCursor(Qt.CursorShape.ArrowCursor)
+        self.tree_widget.viewport().setCursor(Qt.CursorShape.ArrowCursor)
+        self.tree_widget.setMouseTracking(True)
+        self.tree_widget.viewport().setMouseTracking(True)
         self.tree_widget.setVerticalScrollMode(QTreeWidget.ScrollMode.ScrollPerPixel)
         self.tree_widget.viewport().setAttribute(Qt.WidgetAttribute.WA_AcceptTouchEvents, True)
         QScroller.grabGesture(
@@ -480,6 +482,19 @@ class FolderSidebar(QWidget):
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         """Handle keyboard shortcuts and mouse interactions on the folder tree."""
+        if watched == self.tree_widget.viewport():
+            if event.type() == QEvent.Type.MouseMove:
+                item = self.tree_widget.itemAt(event.pos())
+                target_cursor = (
+                    Qt.CursorShape.PointingHandCursor
+                    if item is not None
+                    else Qt.CursorShape.ArrowCursor
+                )
+                if self.tree_widget.viewport().cursor().shape() != target_cursor:
+                    self.tree_widget.viewport().setCursor(target_cursor)
+            elif event.type() == QEvent.Type.Leave:
+                self.tree_widget.viewport().setCursor(Qt.CursorShape.ArrowCursor)
+
         if (
             watched in (self.tree_widget, self.tree_widget.viewport())
             and event.type() == QEvent.Type.MouseButtonPress

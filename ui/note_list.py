@@ -457,8 +457,10 @@ class NoteListPanel(QWidget):
         self.list_widget = _DraggableNoteListWidget(self)
         self.list_widget.setObjectName("NoteCardsList")
         self.list_widget.setItemDelegate(NoteCardDelegate(self))
-        self.list_widget.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.list_widget.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
+        self.list_widget.setCursor(Qt.CursorShape.ArrowCursor)
+        self.list_widget.viewport().setCursor(Qt.CursorShape.ArrowCursor)
+        self.list_widget.setMouseTracking(True)
+        self.list_widget.viewport().setMouseTracking(True)
         self.list_widget.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
         self.list_widget.viewport().setAttribute(Qt.WidgetAttribute.WA_AcceptTouchEvents, True)
         QScroller.grabGesture(self.list_widget.viewport(), QScroller.ScrollerGestureType.TouchGesture)
@@ -535,7 +537,20 @@ class NoteListPanel(QWidget):
             self.note_clicked.emit(note)
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
-        """Handle keyboard shortcuts such as Delete/Backspace on note list."""
+        """Handle keyboard shortcuts and hover cursor updates on note list."""
+        if watched == self.list_widget.viewport():
+            if event.type() == QEvent.Type.MouseMove:
+                item = self.list_widget.itemAt(event.pos())
+                target_cursor = (
+                    Qt.CursorShape.PointingHandCursor
+                    if item is not None
+                    else Qt.CursorShape.ArrowCursor
+                )
+                if self.list_widget.viewport().cursor().shape() != target_cursor:
+                    self.list_widget.viewport().setCursor(target_cursor)
+            elif event.type() == QEvent.Type.Leave:
+                self.list_widget.viewport().setCursor(Qt.CursorShape.ArrowCursor)
+
         if (
             watched in (self.list_widget, self.list_widget.viewport())
             and event.type() == QEvent.Type.KeyPress

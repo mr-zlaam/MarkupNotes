@@ -209,15 +209,48 @@ class TestFolderIconsAndContextMenus(unittest.TestCase):
         sidebar.deleteLater()
 
     def test_sidebar_and_note_list_cursor_pointers(self) -> None:
-        """Verify tree and list views have PointingHandCursor for clickable interactions."""
+        """Verify empty space uses default ArrowCursor and hovering items switches to PointingHandCursor."""
+        from PyQt6.QtCore import QEvent, QPointF
+        from PyQt6.QtGui import QMouseEvent
+
         sidebar = FolderSidebar(parent=None)
-        self.assertEqual(sidebar.tree_widget.cursor().shape(), Qt.CursorShape.PointingHandCursor)
+        sidebar.resize(260, 400)
+        sidebar.set_folders([], current_selection=None)
+        sidebar.show()
+        QApplication.processEvents()
+        self.assertEqual(sidebar.tree_widget.cursor().shape(), Qt.CursorShape.ArrowCursor)
+        self.assertEqual(sidebar.tree_widget.viewport().cursor().shape(), Qt.CursorShape.ArrowCursor)
+
+        # Hovering 'All Notes' row switches to PointingHandCursor
+        item_rect = sidebar.tree_widget.visualItemRect(sidebar.tree_widget.topLevelItem(0))
+        over_item = QMouseEvent(
+            QEvent.Type.MouseMove,
+            QPointF(item_rect.center()),
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        QApplication.sendEvent(sidebar.tree_widget.viewport(), over_item)
         self.assertEqual(sidebar.tree_widget.viewport().cursor().shape(), Qt.CursorShape.PointingHandCursor)
+
+        # Hovering empty space below items restores ArrowCursor
+        over_empty = QMouseEvent(
+            QEvent.Type.MouseMove,
+            QPointF(50.0, 350.0),
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        QApplication.sendEvent(sidebar.tree_widget.viewport(), over_empty)
+        self.assertEqual(sidebar.tree_widget.viewport().cursor().shape(), Qt.CursorShape.ArrowCursor)
         sidebar.deleteLater()
 
         note_list = NoteListPanel(parent=None)
-        self.assertEqual(note_list.list_widget.cursor().shape(), Qt.CursorShape.PointingHandCursor)
-        self.assertEqual(note_list.list_widget.viewport().cursor().shape(), Qt.CursorShape.PointingHandCursor)
+        note_list.resize(280, 400)
+        note_list.show()
+        QApplication.processEvents()
+        self.assertEqual(note_list.list_widget.cursor().shape(), Qt.CursorShape.ArrowCursor)
+        self.assertEqual(note_list.list_widget.viewport().cursor().shape(), Qt.CursorShape.ArrowCursor)
         note_list.deleteLater()
 
     def test_note_list_empty_space_context_menu(self) -> None:
