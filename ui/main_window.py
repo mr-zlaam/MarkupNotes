@@ -7,7 +7,7 @@ import time
 from typing import List, Optional, Union
 
 from PyQt6.QtCore import QEasingCurve, QFileSystemWatcher, QTimer, QVariantAnimation, Qt
-from PyQt6.QtGui import QCloseEvent, QIcon, QKeyEvent, QKeySequence, QShortcut
+from PyQt6.QtGui import QCloseEvent, QDragEnterEvent, QDropEvent, QIcon, QKeyEvent, QKeySequence, QShortcut
 from PyQt6.QtWidgets import QApplication, QMainWindow, QMessageBox, QSplitter, QWidget
 
 from core.config import ConfigManager
@@ -21,7 +21,14 @@ from ui.note_list import NoteListPanel
 from ui.sidebar import FolderSidebar
 from utils.file_validator import MAX_FOLDER_NAME_LENGTH, validate_folder_name, validate_markdown_file
 from utils.note_io import AsyncSaveQueue, note_matches_query
-from utils.paths import folder_contains_pinned_items, is_invalid_folder_transfer
+from utils.paths import (
+    classify_dropped_local_paths,
+    extract_local_paths_from_mime,
+    folder_contains_pinned_items,
+    is_invalid_folder_transfer,
+    resolve_copy_target_path,
+    should_accept_external_file_drag,
+)
 from utils.sorting import normalize_sort_order, sort_notes
 
 ZOOM_STEPS: tuple[float, ...] = (0.75, 0.85, 0.9, 1.0, 1.1, 1.25, 1.4, 1.6, 1.8, 2.0)
@@ -40,6 +47,7 @@ class MainWindow(QMainWindow):
         super().__init__(parent=parent)
         self._initial_path = initial_path
         self.setWindowTitle("Markup Notes")
+        self.setAcceptDrops(True)
 
         app_icon = QIcon()
         icons_dir = Path(__file__).resolve().parent.parent / "assets" / "icons"
@@ -117,6 +125,7 @@ class MainWindow(QMainWindow):
         self.sidebar.paste_into_folder_requested.connect(self._on_paste_into_folder)
         self.sidebar.undo_file_op_requested.connect(self._on_undo_file_operation)
         self.sidebar.cancel_clipboard_requested.connect(self._clear_clipboard)
+        self.sidebar.external_files_dropped.connect(self._on_external_files_dropped)
 
         # 2. Middle: Note Cards List
         self.note_list = NoteListPanel(parent=self.splitter)
@@ -136,6 +145,7 @@ class MainWindow(QMainWindow):
         self.note_list.paste_requested.connect(self._on_paste_into_current_folder)
         self.note_list.undo_file_op_requested.connect(self._on_undo_file_operation)
         self.note_list.cancel_clipboard_requested.connect(self._clear_clipboard)
+        self.note_list.external_files_dropped.connect(self._on_external_files_dropped)
 
         # 3. Middle-Right: Editor Canvas
         self.editor = EditorPanel(parent=self.splitter)
@@ -157,6 +167,7 @@ class MainWindow(QMainWindow):
         self.editor.focus_received.connect(self._on_editor_focus_received)
         self.editor.pin_active_note_requested.connect(self._on_toggle_pin_active_note)
         self.editor.image_pasted.connect(self._on_editor_image_pasted)
+        self.editor.external_files_dropped.connect(self._on_external_files_dropped)
 
         # 4. Far Right: Backup & Version History Panel
         self.backup_panel = BackupPanel(
@@ -1782,6 +1793,88 @@ class MainWindow(QMainWindow):
         self._refresh_after_workspace_transfer(
             select_note_path=self._current_note.path if self._current_note else None
         )
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        """Accept global OS drag-and-drop of Markdown files anywhere on the main window."""
+        if should_accept_external_file_drag(event.mimeData(), allow_images=False):
+            event.acceptProposedAction()
+            return
+        super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event) -> None:
+        """Keep accepting external OS Markdown drops while dragging across the main window."""
+        if should_accept_external_file_drag(event.mimeData(), allow_images=False):
+            event.acceptProposedAction()
+            return
+        super().dragMoveEvent(event)
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        """Import and open Markdown files dropped onto the main window."""
+        local_paths = extract_local_paths_from_mime(event.mimeData())
+        if local_paths:
+            md_files, _ = classify_dropped_local_paths(local_paths)
+            if md_files:
+                event.acceptProposedAction()
+                self._on_external_files_dropped(md_files)
+                return
+        super().dropEvent(event)
+
+    def _on_external_files_dropped(
+        self,
+        file_paths: List[Path],
+        target_folder: Optional[Path] = None,
+    ) -> None:
+        """Import external Markdown files into target_folder (or active folder) and open the last one."""
+        if not file_paths:
+            return
+
+        self.flush_pending_save()
+        dest_dir = (
+            target_folder
+            if target_folder is not None
+            else (self._current_folder if self._current_folder is not None else self.storage.root_dir)
+        )
+        root_resolved = self.storage.root_dir.resolve()
+        opened_path: Optional[Path] = None
+
+        for src_path in file_paths:
+            is_valid, _, _ = validate_markdown_file(src_path)
+            if not is_valid:
+                continue
+
+            # If file is already inside the vault, just open it without duplicating
+            try:
+                src_resolved = src_path.resolve()
+                is_in_vault = src_resolved == root_resolved or root_resolved in src_resolved.parents
+            except OSError:
+                is_in_vault = False
+
+            if is_in_vault:
+                opened_path = src_path
+                continue
+
+            # Import external file as a .md note into dest_dir with collision-safe naming
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            target_name = f"{src_path.stem}.md" if src_path.suffix.lower() != ".md" else src_path.name
+            dst_path = resolve_copy_target_path(dest_dir, target_name, is_dir=False)
+            try:
+                content = src_path.read_text(encoding="utf-8", errors="replace")
+                self.storage.save_note_content(dst_path, content)
+                opened_path = dst_path
+            except (PermissionError, OSError):
+                continue
+
+        if opened_path is None:
+            return
+
+        if target_folder is not None:
+            self._current_folder = target_folder
+        self._refresh_after_workspace_transfer(select_note_path=opened_path)
+        note_obj = Note.from_file(opened_path)
+        if note_obj is not None:
+            self._current_note = note_obj
+            self.editor.load_note(note_obj)
+            self._reveal_active_note_parents(note_obj)
 
     def _on_editor_image_pasted(self) -> None:
         """Refresh Git status and schedule auto-backup after pasting an image into the vault."""

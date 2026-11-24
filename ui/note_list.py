@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set
 
 from PyQt6.QtCore import QEvent, QMimeData, QModelIndex, QObject, QPoint, QRect, QRectF, QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QDrag, QFont, QFontMetrics, QPainter, QPainterPath, QPen
+from PyQt6.QtGui import QColor, QDrag, QDragEnterEvent, QDragMoveEvent, QDropEvent, QFont, QFontMetrics, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QHBoxLayout,
@@ -29,6 +29,11 @@ from PyQt6.QtWidgets import (
 from core.note import Note
 from ui.context_menu import ModernContextMenu
 from ui.dialogs import ModernColorDialog
+from utils.paths import (
+    classify_dropped_local_paths,
+    extract_local_paths_from_mime,
+    should_accept_external_file_drag,
+)
 from utils.icons import (
     PRESET_COLORS,
     create_check_icon,
@@ -55,13 +60,41 @@ MIME_WORKSPACE_ITEM = "application/x-markup-notes-item"
 
 
 class _DraggableNoteListWidget(QListWidget):
-    """QListWidget supporting drag-out of note cards into folders without mutating internal order."""
+    """QListWidget supporting drag-out of note cards and OS drops of external Markdown files."""
 
     def __init__(self, panel: "NoteListPanel") -> None:
         super().__init__(parent=panel)
         self._panel = panel
         self.setDragEnabled(True)
-        self.setDragDropMode(QAbstractItemView.DragDropMode.DragOnly)
+        self.setAcceptDrops(True)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        if not event.mimeData().hasFormat(MIME_WORKSPACE_ITEM) and should_accept_external_file_drag(
+            event.mimeData(), allow_images=False
+        ):
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def dragMoveEvent(self, event: QDragMoveEvent) -> None:
+        if not event.mimeData().hasFormat(MIME_WORKSPACE_ITEM) and should_accept_external_file_drag(
+            event.mimeData(), allow_images=False
+        ):
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        if not event.mimeData().hasFormat(MIME_WORKSPACE_ITEM):
+            local_paths = extract_local_paths_from_mime(event.mimeData())
+            if local_paths:
+                md_files, _ = classify_dropped_local_paths(local_paths)
+                if md_files:
+                    event.acceptProposedAction()
+                    self._panel.external_files_dropped.emit(md_files)
+                    return
+        event.ignore()
 
     def startDrag(self, supportedActions: Qt.DropAction) -> None:
         if self._panel.is_selection_mode:
@@ -267,6 +300,7 @@ class NoteListPanel(QWidget):
     paste_requested = pyqtSignal()
     undo_file_op_requested = pyqtSignal()
     cancel_clipboard_requested = pyqtSignal()
+    external_files_dropped = pyqtSignal(list)  # Emits List[Path]
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent=parent)

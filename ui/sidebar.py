@@ -28,7 +28,13 @@ from ui.context_menu import ModernContextMenu
 from ui.dialogs import ModernColorDialog, ModernInputDialog
 from ui.note_list import MIME_WORKSPACE_ITEM
 from utils.file_validator import MAX_FOLDER_NAME_LENGTH, validate_folder_name
-from utils.paths import collect_ancestors_in_set, collect_folder_and_descendants
+from utils.paths import (
+    classify_dropped_local_paths,
+    collect_ancestors_in_set,
+    collect_folder_and_descendants,
+    extract_local_paths_from_mime,
+    should_accept_external_file_drag,
+)
 from utils.sorting import DEFAULT_SORT_ORDER, normalize_sort_order, sort_folders
 from utils.icons import (
     PRESET_COLORS,
@@ -87,23 +93,38 @@ class _DraggableFolderTreeWidget(QTreeWidget):
         )
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
-        if self._sidebar.is_selection_mode or not event.mimeData().hasFormat(MIME_WORKSPACE_ITEM):
+        if self._sidebar.is_selection_mode:
             event.ignore()
             return
-        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-            event.setDropAction(Qt.DropAction.CopyAction)
-        else:
-            event.setDropAction(Qt.DropAction.MoveAction)
-        event.accept()
+        if event.mimeData().hasFormat(MIME_WORKSPACE_ITEM):
+            if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                event.setDropAction(Qt.DropAction.CopyAction)
+            else:
+                event.setDropAction(Qt.DropAction.MoveAction)
+            event.accept()
+            return
+        if should_accept_external_file_drag(event.mimeData(), allow_images=False):
+            event.acceptProposedAction()
+            return
+        event.ignore()
 
     def dragMoveEvent(self, event: QDragMoveEvent) -> None:
-        if self._sidebar.is_selection_mode or not event.mimeData().hasFormat(MIME_WORKSPACE_ITEM):
+        if self._sidebar.is_selection_mode:
             event.ignore()
             return
-        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+        accepted = False
+        if event.mimeData().hasFormat(MIME_WORKSPACE_ITEM):
+            if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                event.setDropAction(Qt.DropAction.CopyAction)
+            else:
+                event.setDropAction(Qt.DropAction.MoveAction)
+            accepted = True
+        elif should_accept_external_file_drag(event.mimeData(), allow_images=False):
             event.setDropAction(Qt.DropAction.CopyAction)
-        else:
-            event.setDropAction(Qt.DropAction.MoveAction)
+            accepted = True
+        if not accepted:
+            event.ignore()
+            return
         hovered = self.itemAt(event.position().toPoint())
         if hovered is not self._drop_target_item:
             self._drop_target_item = hovered
@@ -119,20 +140,7 @@ class _DraggableFolderTreeWidget(QTreeWidget):
     def dropEvent(self, event: QDropEvent) -> None:
         self._drop_target_item = None
         self.viewport().update()
-        if self._sidebar.is_selection_mode or not event.mimeData().hasFormat(MIME_WORKSPACE_ITEM):
-            event.ignore()
-            return
-
-        try:
-            raw = bytes(event.mimeData().data(MIME_WORKSPACE_ITEM)).decode("utf-8")
-            payload = json.loads(raw)
-            kind = str(payload.get("kind", ""))
-            src_path = Path(str(payload.get("path", "")))
-        except (ValueError, TypeError, OSError):
-            event.ignore()
-            return
-
-        if kind not in ("note", "folder") or not str(src_path):
+        if self._sidebar.is_selection_mode:
             event.ignore()
             return
 
@@ -142,11 +150,37 @@ class _DraggableFolderTreeWidget(QTreeWidget):
             if target_item is not None
             else None
         )
-        is_copy = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier) or (
-            event.dropAction() == Qt.DropAction.CopyAction
-        )
-        event.acceptProposedAction()
-        self._sidebar.item_drop_requested.emit(kind, src_path, target_folder, is_copy)
+
+        if event.mimeData().hasFormat(MIME_WORKSPACE_ITEM):
+            try:
+                raw = bytes(event.mimeData().data(MIME_WORKSPACE_ITEM)).decode("utf-8")
+                payload = json.loads(raw)
+                kind = str(payload.get("kind", ""))
+                src_path = Path(str(payload.get("path", "")))
+            except (ValueError, TypeError, OSError):
+                event.ignore()
+                return
+
+            if kind not in ("note", "folder") or not str(src_path):
+                event.ignore()
+                return
+
+            is_copy = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier) or (
+                event.dropAction() == Qt.DropAction.CopyAction
+            )
+            event.acceptProposedAction()
+            self._sidebar.item_drop_requested.emit(kind, src_path, target_folder, is_copy)
+            return
+
+        local_paths = extract_local_paths_from_mime(event.mimeData())
+        if local_paths:
+            md_files, _ = classify_dropped_local_paths(local_paths)
+            if md_files:
+                event.acceptProposedAction()
+                self._sidebar.external_files_dropped.emit(md_files, target_folder)
+                return
+
+        event.ignore()
 
 
 class _FolderTreeDelegate(QStyledItemDelegate):
@@ -212,6 +246,7 @@ class FolderSidebar(QWidget):
     paste_into_folder_requested = pyqtSignal(object)  # Emits Optional[Path] (None = root)
     undo_file_op_requested = pyqtSignal()
     cancel_clipboard_requested = pyqtSignal()
+    external_files_dropped = pyqtSignal(list, object)  # (List[Path], Optional[Path] target_folder)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent=parent)

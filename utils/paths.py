@@ -2,7 +2,8 @@
 
 import os
 from pathlib import Path
-from typing import Iterable, List, Set
+from typing import Any, Iterable, List, Set
+from urllib.parse import unquote, urlparse
 
 
 def get_default_notes_dir() -> Path:
@@ -155,3 +156,73 @@ def folder_contains_pinned_items(
         if key.startswith(prefix):
             return True
     return False
+
+
+SUPPORTED_DROP_MARKDOWN_EXTENSIONS = frozenset({".md", ".markdown", ".mdown", ".mkd", ".txt"})
+SUPPORTED_DROP_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".svg"})
+
+
+def classify_dropped_local_paths(paths: Iterable[Path]) -> tuple[List[Path], List[Path]]:
+    """Split dropped local file paths into (markdown_files, image_files)."""
+    md_files: List[Path] = []
+    img_files: List[Path] = []
+    for p in paths:
+        try:
+            if not p.is_file():
+                continue
+        except OSError:
+            continue
+        ext = p.suffix.lower()
+        if ext in SUPPORTED_DROP_MARKDOWN_EXTENSIONS:
+            md_files.append(p)
+        elif ext in SUPPORTED_DROP_IMAGE_EXTENSIONS:
+            img_files.append(p)
+    return md_files, img_files
+
+
+def extract_local_paths_from_mime(mime_data: Any) -> List[Path]:
+    """Extract local file paths from Qt QMimeData, with raw text/uri-list fallback for Wayland."""
+    paths: List[Path] = []
+    seen: Set[Path] = set()
+
+    if mime_data.hasUrls():
+        for url in mime_data.urls():
+            if url.isLocalFile():
+                p = Path(url.toLocalFile())
+                if p not in seen:
+                    seen.add(p)
+                    paths.append(p)
+
+    if not paths and mime_data.hasFormat("text/uri-list"):
+        try:
+            raw = bytes(mime_data.data("text/uri-list")).decode("utf-8", errors="ignore")
+        except (TypeError, ValueError):
+            raw = ""
+        for line in raw.splitlines():
+            entry = line.strip()
+            if not entry or entry.startswith("#"):
+                continue
+            if entry.startswith("file://"):
+                parsed = urlparse(entry)
+                local_str = unquote(parsed.path)
+                if local_str:
+                    p = Path(local_str)
+                    if p not in seen:
+                        seen.add(p)
+                        paths.append(p)
+    return paths
+
+
+def should_accept_external_file_drag(mime_data: Any, *, allow_images: bool = False) -> bool:
+    """Return True if a dragEnter/dragMove event should be accepted for external OS file drops.
+
+    On Wayland, mimeData often advertises text/uri-list before populating URLs until dropEvent,
+    so an empty URL list with text/uri-list present must be accepted during drag hover.
+    """
+    if not (mime_data.hasUrls() or mime_data.hasFormat("text/uri-list")):
+        return False
+    local_paths = extract_local_paths_from_mime(mime_data)
+    if not local_paths:
+        return True
+    md_files, img_files = classify_dropped_local_paths(local_paths)
+    return bool(md_files or (allow_images and img_files))

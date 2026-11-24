@@ -16,6 +16,9 @@ from PyQt6.QtGui import (
     QColor,
     QContextMenuEvent,
     QDesktopServices,
+    QDragEnterEvent,
+    QDragMoveEvent,
+    QDropEvent,
     QFocusEvent,
     QFont,
     QFontMetricsF,
@@ -67,6 +70,11 @@ from utils.image_engine import (
     get_image_card_dimensions,
     render_image_card,
     save_pasted_image,
+)
+from utils.paths import (
+    classify_dropped_local_paths,
+    extract_local_paths_from_mime,
+    should_accept_external_file_drag,
 )
 from utils.video_engine import (
     VideoRegion,
@@ -212,6 +220,7 @@ class MarkdownEditor(QTextEdit):
     focus_received = pyqtSignal()
     pin_active_note_requested = pyqtSignal()
     image_pasted = pyqtSignal()
+    external_files_dropped = pyqtSignal(list)  # Emits List[Path]
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent=parent)
@@ -1776,6 +1785,61 @@ class MarkdownEditor(QTextEdit):
                 cursor.endEditBlock()
         else:
             super().insertFromMimeData(source)
+
+    def canInsertFromMimeData(self, source: QMimeData) -> bool:
+        """Allow Qt drag/drop and paste for external OS file URLs and clipboard images."""
+        if source.hasImage() or source.hasUrls() or source.hasFormat("text/uri-list"):
+            return True
+        return super().canInsertFromMimeData(source)
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        """Accept external OS drops of Markdown or image files onto the editor canvas."""
+        if should_accept_external_file_drag(event.mimeData(), allow_images=True):
+            event.acceptProposedAction()
+            return
+        super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event: QDragMoveEvent) -> None:
+        """Keep accepting external Markdown or image file drops while dragging over the editor."""
+        if should_accept_external_file_drag(event.mimeData(), allow_images=True):
+            event.acceptProposedAction()
+            return
+        super().dragMoveEvent(event)
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        """Handle dropping Markdown files (import/open) or image files (insert at drop cursor)."""
+        local_paths = extract_local_paths_from_mime(event.mimeData())
+        if local_paths:
+            md_files, img_files = classify_dropped_local_paths(local_paths)
+            if img_files:
+                base_dir = self._note_dir or self._vault_root
+                if base_dir is not None:
+                    drop_cursor = self.cursorForPosition(event.position().toPoint())
+                    self.setTextCursor(drop_cursor)
+                    snippets: list[str] = []
+                    for img_path in img_files:
+                        rel = copy_pasted_image_file(img_path, base_dir)
+                        if rel:
+                            snippets.append(f"![{img_path.stem}]({rel})")
+                    if snippets:
+                        cursor = self.textCursor()
+                        cursor.beginEditBlock()
+                        try:
+                            cursor.insertText("\n".join(snippets))
+                        finally:
+                            cursor.endEditBlock()
+                        self.image_pasted.emit()
+                if md_files:
+                    self.external_files_dropped.emit(md_files)
+                event.acceptProposedAction()
+                return
+            if md_files:
+                event.acceptProposedAction()
+                self.external_files_dropped.emit(md_files)
+                return
+            event.ignore()
+            return
+        super().dropEvent(event)
 
     @staticmethod
     def _text_may_affect_regions(text: str) -> bool:
@@ -4041,6 +4105,7 @@ class EditorPanel(QWidget):
     focus_received = pyqtSignal()
     pin_active_note_requested = pyqtSignal()
     image_pasted = pyqtSignal()
+    external_files_dropped = pyqtSignal(list)  # Emits List[Path]
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent=parent)
@@ -4182,6 +4247,7 @@ class EditorPanel(QWidget):
         self.editor.focus_received.connect(self.focus_received.emit)
         self.editor.pin_active_note_requested.connect(self.pin_active_note_requested.emit)
         self.editor.image_pasted.connect(self.image_pasted.emit)
+        self.editor.external_files_dropped.connect(self.external_files_dropped.emit)
 
         # In-note Find & Replace Bar
         self.find_replace_bar = FindReplaceBar(parent=self)
