@@ -9,7 +9,7 @@ import re
 import time
 from typing import Dict, List, Optional, Set, Tuple
 
-from PyQt6.QtCore import QEvent, QMimeData, QPoint, QPointF, QRect, QRectF, QTimer, QUrl, Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, QMimeData, QPoint, QPointF, QRect, QRectF, QThreadPool, QTimer, QUrl, Qt, pyqtSignal
 from PyQt6.QtGui import (
     QAction,
     QBrush,
@@ -29,6 +29,7 @@ from PyQt6.QtGui import (
     QTextBlock,
     QTextBlockFormat,
     QTextCursor,
+    QTextDocument,
     QTextOption,
     QTouchEvent,
     QWheelEvent,
@@ -64,6 +65,14 @@ from utils.video_engine import (
 )
 from utils.touch import TouchScrollTracker, is_touch_event
 from utils.transient_scrollbar import TransientScrollBarController
+from utils.doc_cache import (
+    LARGE_NOTE_LOADER_BYTES,
+    AsyncNoteLoadWorker,
+    CachedNoteDocument,
+    NoteDocumentCache,
+    clean_note_markdown,
+    get_file_stat_signature,
+)
 from utils.note_io import count_words_fast
 from utils.undo_manager import PlainTextUndoManager
 from utils.icons import (
@@ -229,6 +238,7 @@ class MarkdownEditor(QTextEdit):
         self._pending_text_mutation: bool = False
         self._pending_changes: List[Tuple[int, int, str]] = []
         self._dirty_margin_blocks: Optional[Set[int]] = None
+        self._needs_bulk_line_height: bool = False
         self._last_block_count: int = 1
 
         # Attach cursor-aware Obsidian syntax highlighter
@@ -1365,6 +1375,15 @@ class MarkdownEditor(QTextEdit):
 
             try:
                 if dirty_blocks is None:
+                    if self._needs_bulk_line_height and doc.blockCount() > 100:
+                        bulk_c = QTextCursor(doc)
+                        bulk_c.select(QTextCursor.SelectionType.Document)
+                        base_bf = QTextBlockFormat()
+                        base_bf.setLineHeight(
+                            120.0, QTextBlockFormat.LineHeightTypes.ProportionalHeight.value
+                        )
+                        bulk_c.setBlockFormat(base_bf)
+                        self._needs_bulk_line_height = False
                     b = doc.firstBlock()
                     while b.isValid():
                         _apply_to_block(b)
@@ -1384,6 +1403,88 @@ class MarkdownEditor(QTextEdit):
         self._dirty_margin_blocks = None
         self._update_block_margins()
 
+    def _configure_document(self, doc: QTextDocument) -> None:
+        """Apply consistent LTR text option, font, and disabled Qt undo stack to a QTextDocument."""
+        opt = doc.defaultTextOption()
+        opt.setTextDirection(Qt.LayoutDirection.LeftToRight)
+        opt.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        opt.setWrapMode(QTextOption.WrapMode.WordWrap)
+        doc.setDefaultTextOption(opt)
+        doc.setDefaultFont(self.font())
+        doc.setUndoRedoEnabled(False)
+
+    def _connect_document_signals(self, doc: QTextDocument) -> None:
+        doc.contentsChange.connect(self._on_document_contents_change)
+        doc.contentsChanged.connect(self._on_contents_changed)
+
+    def _disconnect_document_signals(self, doc: QTextDocument) -> None:
+        try:
+            doc.contentsChange.disconnect(self._on_document_contents_change)
+        except (TypeError, RuntimeError):
+            pass
+        try:
+            doc.contentsChanged.disconnect(self._on_contents_changed)
+        except (TypeError, RuntimeError):
+            pass
+
+    def create_fresh_document(
+        self,
+    ) -> Tuple[QTextDocument, MarkdownHighlighter, PlainTextUndoManager]:
+        """Create a standalone QTextDocument paired with its own highlighter and undo manager."""
+        doc = QTextDocument(self)
+        self._configure_document(doc)
+        hl = MarkdownHighlighter(doc)
+        hl.ui_scale = getattr(self, "ui_scale", 1.0)
+        undo_mgr = PlainTextUndoManager()
+        return doc, hl, undo_mgr
+
+    def attach_document_state(
+        self,
+        doc: QTextDocument,
+        highlighter: MarkdownHighlighter,
+        undo_manager: PlainTextUndoManager,
+        *,
+        scroll_y: int = 0,
+        cursor_anchor: int = 0,
+        cursor_pos: int = 0,
+    ) -> None:
+        """Swap in an existing QTextDocument, highlighter, undo manager, cursor, and scroll state."""
+        self._margin_timer.stop()
+        self._region_timer.stop()
+        self._pending_text_mutation = False
+        self._pending_changes.clear()
+        self._resetting_text = True
+        try:
+            old_doc = self.document()
+            if old_doc is not None and old_doc is not doc:
+                self._disconnect_document_signals(old_doc)
+            self._configure_document(doc)
+            super().setDocument(doc)
+            self.highlighter = highlighter
+            self.highlighter.ui_scale = getattr(self, "ui_scale", 1.0)
+            self.undo_manager = undo_manager
+            if old_doc is not doc:
+                self._connect_document_signals(doc)
+
+            self._last_block_count = doc.blockCount()
+            self._dirty_margin_blocks = set()
+
+            doc_len = max(0, doc.characterCount() - 1)
+            clamped_anchor = max(0, min(doc_len, cursor_anchor))
+            clamped_pos = max(0, min(doc_len, cursor_pos))
+            cur = QTextCursor(doc)
+            cur.setPosition(clamped_anchor)
+            if clamped_pos != clamped_anchor:
+                cur.setPosition(clamped_pos, QTextCursor.MoveMode.KeepAnchor)
+            self.setTextCursor(cur)
+
+            self.highlighter.active_block_number = cur.block().blockNumber()
+            self.highlighter.cursor_pos_in_block = cur.positionInBlock()
+            self.verticalScrollBar().setValue(max(0, scroll_y))
+            self.viewport().update()
+        finally:
+            self._resetting_text = False
+
     def setPlainText(self, text: str) -> None:
         """Set editor plain text, reset undo history, refresh regions, and apply block margins in one pass."""
         self._margin_timer.stop()
@@ -1399,7 +1500,9 @@ class MarkdownEditor(QTextEdit):
             self.highlighter.cursor_pos_in_block = cur.positionInBlock()
             changed = self.highlighter.refresh_regions()
             self._dirty_margin_blocks = None
+            self._needs_bulk_line_height = True
             self._update_block_margins()
+            self._needs_bulk_line_height = False
             if changed:
                 doc = self.document()
                 for b_num in changed:
@@ -3680,6 +3783,15 @@ class EditorPanel(QWidget):
         self._word_count_timer.setInterval(250)
         self._word_count_timer.timeout.connect(self._update_word_count)
 
+        # LRU document cache & cancellable background reader for >= 500 KB notes
+        self._doc_cache = NoteDocumentCache()
+        self._active_cached_path: Optional[Path] = None
+        self._load_generation_id: int = 0
+        self._pending_load_note: Optional[Note] = None
+        self._is_loading_note: bool = False
+        self._load_pool = QThreadPool()
+        self._load_pool.setMaxThreadCount(2)
+
         self._init_ui()
 
     def _init_ui(self) -> None:
@@ -3799,13 +3911,42 @@ class EditorPanel(QWidget):
 
         self.find_replace_bar.setVisible(False)
 
+        # Subtle floating loading indicator for large notes (>= 500 KB) on first open
+        self._loading_overlay = QLabel("Loading large note...", parent=self)
+        self._loading_overlay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._loading_overlay.setStyleSheet("""
+            QLabel {
+                background-color: rgba(32, 32, 36, 235);
+                color: #e5e5ea;
+                border: 1px solid #3a3a40;
+                border-radius: 8px;
+                padding: 8px 16px;
+                font-size: 12px;
+                font-weight: 500;
+            }
+        """)
+        self._loading_overlay.adjustSize()
+        self._loading_overlay.setVisible(False)
+
         layout.addWidget(self.editor)
 
     def resizeEvent(self, event: QResizeEvent) -> None:
-        """Reposition the floating Find & Replace bar when the editor panel is resized."""
+        """Reposition floating overlays when the editor panel is resized."""
         super().resizeEvent(event)
         if hasattr(self, "find_replace_bar") and self.find_replace_bar.isVisible():
             self._update_find_bar_geometry()
+        if hasattr(self, "_loading_overlay") and self._loading_overlay.isVisible():
+            self._position_loading_overlay()
+
+    def _position_loading_overlay(self) -> None:
+        """Center the large-note loading pill inside the editor panel."""
+        self._loading_overlay.adjustSize()
+        ow = self._loading_overlay.width()
+        oh = self._loading_overlay.height()
+        x = max(16, (self.width() - ow) // 2)
+        y = max(60, (self.height() - oh) // 2)
+        self._loading_overlay.move(x, y)
+        self._loading_overlay.raise_()
 
     def _update_find_bar_geometry(self) -> None:
         """Position Find & Replace bar as a responsive floating overlay below the top-right header."""
@@ -4014,10 +4155,197 @@ class EditorPanel(QWidget):
         from ui.shortcuts_dialog import ModernShortcutsDialog
         ModernShortcutsDialog.show_shortcuts(self.window())
 
+    def _current_style_signature(self) -> Tuple[float, int, str]:
+        """Return (ui_scale, font_size_pt, font_family) for cache style validation."""
+        return (
+            float(getattr(self.editor, "ui_scale", 1.0)),
+            int(getattr(self.editor, "_font_size_pt", 12)),
+            str(getattr(self.editor, "_font_family", "")),
+        )
+
+    def _save_active_viewport_state(self) -> None:
+        """Persist current scroll and cursor state into the active cached note entry."""
+        if self._active_cached_path is None or self._is_loading_note:
+            return
+        entry = self._doc_cache.peek(self._active_cached_path)
+        if entry is None or entry.document is not self.editor.document():
+            return
+        cur = self.editor.textCursor()
+        entry.scroll_y = self.editor.verticalScrollBar().value()
+        entry.cursor_anchor = cur.anchor()
+        entry.cursor_pos = cur.position()
+        ui_scale, font_size_pt, font_family = self._current_style_signature()
+        entry.ui_scale = ui_scale
+        entry.font_size_pt = font_size_pt
+        entry.font_family = font_family
+
+    def sync_active_cache_stat(self, path: Optional[Path] = None) -> None:
+        """Synchronize the cached entry's disk mtime/size after an internal save."""
+        target = path if path is not None else self._active_cached_path
+        if target is None:
+            return
+        sig = get_file_stat_signature(target)
+        if sig is not None:
+            text_bytes = (
+                len(self.editor.undo_manager.current_text)
+                if target == self._active_cached_path
+                else None
+            )
+            self._doc_cache.update_stat(target, sig[0], sig[1], text_bytes=text_bytes)
+
+    def register_created_note_in_cache(self, note: Note) -> None:
+        """Bind the currently active document to a newly created note path in the LRU cache."""
+        sig = get_file_stat_signature(note.path)
+        if sig is None:
+            return
+        ui_scale, font_size_pt, font_family = self._current_style_signature()
+        cur = self.editor.textCursor()
+        entry = CachedNoteDocument(
+            path=note.path,
+            document=self.editor.document(),
+            highlighter=self.editor.highlighter,
+            undo_manager=self.editor.undo_manager,
+            scroll_y=self.editor.verticalScrollBar().value(),
+            cursor_anchor=cur.anchor(),
+            cursor_pos=cur.position(),
+            mtime_ns=sig[0],
+            size_bytes=sig[1],
+            text_bytes=len(self.editor.undo_manager.current_text),
+            ui_scale=ui_scale,
+            font_size_pt=font_size_pt,
+            font_family=font_family,
+        )
+        self._active_cached_path = note.path
+        self._doc_cache.put(entry, active_path=self._active_cached_path)
+
+    def rename_cached_note(self, old_path: Path, new_path: Path) -> None:
+        """Move a cached note entry when its backing file is renamed."""
+        self._doc_cache.rename(old_path, new_path)
+        if self._active_cached_path == old_path:
+            self._active_cached_path = new_path
+
+    def invalidate_note_cache(self, path: Path) -> None:
+        """Evict a specific note from the document cache."""
+        self._doc_cache.evict(path, active_path=self._active_cached_path)
+        if self._active_cached_path == path:
+            self._active_cached_path = None
+
+    def invalidate_folder_cache(self, folder_path: Path) -> None:
+        """Evict all cached notes located inside a renamed or deleted folder."""
+        self._doc_cache.evict_folder(folder_path, active_path=self._active_cached_path)
+        if self._active_cached_path is not None and (
+            self._active_cached_path == folder_path
+            or folder_path in self._active_cached_path.parents
+        ):
+            self._active_cached_path = None
+
+    def clear_inactive_note_cache(self) -> None:
+        """Evict all inactive cached documents (e.g. after zoom, font, or sync changes)."""
+        self._doc_cache.clear(keep_path=self._active_cached_path)
+
+    def _finalize_loaded_content(
+        self,
+        note: Note,
+        cleaned_content: str,
+        *,
+        mtime_ns: Optional[int],
+        size_bytes: Optional[int],
+    ) -> None:
+        """Populate a fresh QTextDocument with `cleaned_content`, cache it, and refresh UI."""
+        self.editor._table_scroll_x.clear()
+        self.editor._code_scroll_x.clear()
+        self.editor._copied_code_block = None
+        self.editor._scrollbar_drag = None
+        self.editor._transient_scrollbar.hide_immediately()
+        self._word_count_timer.stop()
+
+        self.editor.blockSignals(True)
+        doc, hl, undo_mgr = self.editor.create_fresh_document()
+        self.editor.attach_document_state(doc, hl, undo_mgr)
+        self.editor.setPlainText(cleaned_content)
+        self.editor.setReadOnly(False)
+        self.editor.viewport().update()
+        self.editor.blockSignals(False)
+
+        self._is_loading_note = False
+        self._pending_load_note = None
+        self._loading_overlay.hide()
+
+        if mtime_ns is not None and size_bytes is not None:
+            ui_scale, font_size_pt, font_family = self._current_style_signature()
+            entry = CachedNoteDocument(
+                path=note.path,
+                document=doc,
+                highlighter=hl,
+                undo_manager=undo_mgr,
+                scroll_y=0,
+                cursor_anchor=0,
+                cursor_pos=0,
+                mtime_ns=mtime_ns,
+                size_bytes=size_bytes,
+                text_bytes=len(cleaned_content),
+                ui_scale=ui_scale,
+                font_size_pt=font_size_pt,
+                font_family=font_family,
+            )
+            self._active_cached_path = note.path
+            self._doc_cache.put(entry, active_path=self._active_cached_path)
+        else:
+            self._active_cached_path = None
+
+        self.update_meta(note)
+        self._update_word_count()
+
+        if hasattr(self, "find_replace_bar") and self.find_replace_bar.isVisible() and self.find_replace_bar.find_input.text():
+            self.find_replace_bar.retrigger_search()
+        else:
+            self.editor.clear_search()
+
+    def _on_async_note_loaded(
+        self,
+        gen_id: int,
+        path: Path,
+        cleaned_content: str,
+        mtime_ns: int,
+        size_bytes: int,
+    ) -> None:
+        """Apply asynchronously read large note content if the request is still active."""
+        if gen_id != self._load_generation_id:
+            return
+        note = self._pending_load_note
+        if note is None or note.path != path:
+            return
+        note.content = cleaned_content
+        self._finalize_loaded_content(
+            note,
+            cleaned_content,
+            mtime_ns=mtime_ns,
+            size_bytes=size_bytes,
+        )
+
+    def _on_async_note_failed(self, gen_id: int, path: Path) -> None:
+        """Gracefully recover if an async large-note read failed."""
+        if gen_id != self._load_generation_id:
+            return
+        self._is_loading_note = False
+        self._pending_load_note = None
+        self._loading_overlay.hide()
+        self.editor.setReadOnly(False)
+        self.meta_label.setText("Could not load note")
+
     def load_note(self, note: Optional[Note]) -> None:
-        """Load note markdown into the editor as pure plain text with live highlighting."""
+        """Load note markdown using the LRU QTextDocument cache or async loader for >= 500 KB files."""
+        self._load_generation_id += 1
+        gen_id = self._load_generation_id
+        self._save_active_viewport_state()
+
         self._current_note = note
+        self._pending_load_note = None
+        self._is_loading_note = False
+        self._loading_overlay.hide()
+        self.editor.setReadOnly(False)
         self._save_timer.stop()
+        self._word_count_timer.stop()
         self.editor.slash_palette.hide()
         if hasattr(self.editor, "format_toolbar"):
             self.editor.format_toolbar.hide()
@@ -4025,6 +4353,7 @@ class EditorPanel(QWidget):
             self._title_timer.stop()
 
         if note is None:
+            self._active_cached_path = None
             self.export_btn.setEnabled(False)
             self.title_edit.blockSignals(True)
             self.title_edit.setText("")
@@ -4032,6 +4361,8 @@ class EditorPanel(QWidget):
             self.title_edit.blockSignals(False)
 
             self.editor.blockSignals(True)
+            doc, hl, undo_mgr = self.editor.create_fresh_document()
+            self.editor.attach_document_state(doc, hl, undo_mgr)
             self.editor.setPlainText("")
             self.meta_label.setText("No note selected")
             self.word_count_label.setText("0 words")
@@ -4045,34 +4376,87 @@ class EditorPanel(QWidget):
         self.title_edit.setText(note.title)
         self.title_edit.blockSignals(False)
 
-        # Clean any accidental escaped headings (\# ) and normalize "- []" to "- [ ]"
-        cleaned_content = note.content
-        if "\\#" in cleaned_content:
-            cleaned_content = re.sub(r"^\\(#+\s)", r"\1", cleaned_content, flags=re.MULTILINE)
-        if "[]" in cleaned_content:
-            cleaned_content = re.sub(
-                r"^(\s*[-*+]\s*)\[\](?=\s|$)", r"\1[ ]", cleaned_content, flags=re.MULTILINE
+        stat_sig = get_file_stat_signature(note.path)
+        mtime_ns = stat_sig[0] if stat_sig is not None else None
+        size_bytes = stat_sig[1] if stat_sig is not None else None
+
+        # 1. Fast path: LRU QTextDocument cache hit (~20 ms even on 1M-word files)
+        if stat_sig is not None:
+            ui_scale, font_size_pt, font_family = self._current_style_signature()
+            cached = self._doc_cache.get(
+                note.path,
+                mtime_ns=mtime_ns,
+                size_bytes=size_bytes,
+                ui_scale=ui_scale,
+                font_size_pt=font_size_pt,
+                font_family=font_family,
+                active_path=self._active_cached_path,
             )
+            if cached is not None:
+                self.editor._table_scroll_x.clear()
+                self.editor._code_scroll_x.clear()
+                self.editor._copied_code_block = None
+                self.editor._scrollbar_drag = None
+                self.editor._transient_scrollbar.hide_immediately()
 
-        self.editor._table_scroll_x.clear()
-        self.editor._code_scroll_x.clear()
-        self.editor._copied_code_block = None
-        self.editor._scrollbar_drag = None
-        self.editor._transient_scrollbar.hide_immediately()
-        self._word_count_timer.stop()
+                self.editor.blockSignals(True)
+                self.editor.attach_document_state(
+                    cached.document,
+                    cached.highlighter,
+                    cached.undo_manager,
+                    scroll_y=cached.scroll_y,
+                    cursor_anchor=cached.cursor_anchor,
+                    cursor_pos=cached.cursor_pos,
+                )
+                self.editor.blockSignals(False)
 
-        self.editor.blockSignals(True)
-        self.editor.setPlainText(cleaned_content)
-        self.editor.viewport().update()
-        self.editor.blockSignals(False)
+                self._active_cached_path = note.path
+                self.update_meta(note)
+                self._update_word_count()
+                if hasattr(self, "find_replace_bar") and self.find_replace_bar.isVisible() and self.find_replace_bar.find_input.text():
+                    self.find_replace_bar.retrigger_search()
+                else:
+                    self.editor.clear_search()
+                return
 
-        self.update_meta(note)
-        self._update_word_count()
+        # 2. Large-file uncached path (>= 500 KB): show non-intrusive loader and read in background
+        if (
+            stat_sig is not None
+            and size_bytes is not None
+            and size_bytes >= LARGE_NOTE_LOADER_BYTES
+            and not note.has_loaded_content
+        ):
+            self._is_loading_note = True
+            self._pending_load_note = note
+            self._active_cached_path = None
+            self.editor.blockSignals(True)
+            doc, hl, undo_mgr = self.editor.create_fresh_document()
+            self.editor.attach_document_state(doc, hl, undo_mgr)
+            self.editor.setReadOnly(True)
+            self.editor.blockSignals(False)
 
-        if hasattr(self, "find_replace_bar") and self.find_replace_bar.isVisible() and self.find_replace_bar.find_input.text():
-            self.find_replace_bar.retrigger_search()
-        else:
-            self.editor.clear_search()
+            size_mb = size_bytes / (1024 * 1024)
+            self.meta_label.setText(f"Loading large note ({size_mb:.1f} MB)...")
+            self.word_count_label.setText("Loading...")
+            self._loading_overlay.setText(f"Loading large note ({size_mb:.1f} MB)...")
+            self._position_loading_overlay()
+            self._loading_overlay.show()
+            self._loading_overlay.repaint()
+
+            worker = AsyncNoteLoadWorker(gen_id, note.path)
+            worker.signals.loaded.connect(self._on_async_note_loaded)
+            worker.signals.failed.connect(self._on_async_note_failed)
+            self._load_pool.start(worker)
+            return
+
+        # 3. Normal-sized note (< 500 KB) or synthetic/pre-loaded Note: synchronous load
+        cleaned_content = clean_note_markdown(note.content)
+        self._finalize_loaded_content(
+            note,
+            cleaned_content,
+            mtime_ns=mtime_ns,
+            size_bytes=size_bytes,
+        )
 
     def update_meta(self, note: Note) -> None:
         """Update only the metadata header without reloading the editor document."""
@@ -4130,6 +4514,8 @@ class EditorPanel(QWidget):
 
     def flush_pending_save(self) -> None:
         """Immediately flush any pending debounced save before application exit or switch."""
+        if self._is_loading_note:
+            return
         if self._title_timer.isActive():
             self._flush_title_change()
         if self._save_timer.isActive():
@@ -4138,6 +4524,8 @@ class EditorPanel(QWidget):
 
     def _trigger_auto_save(self) -> None:
         """Emit save signal with latest Markdown text."""
+        if self._is_loading_note:
+            return
         content = self.editor.toPlainText()
         if self._current_note is None:
             pending_title = self.title_edit.text().strip()
@@ -4235,6 +4623,8 @@ class EditorPanel(QWidget):
             self.editor.smart_list = getattr(config.markdown, "smart_list", True)
             self.editor.code_line_numbers = getattr(config.markdown, "code_line_numbers", False)
 
+        self.clear_inactive_note_cache()
+        self._save_active_viewport_state()
         self.editor.highlighter.rehighlight()
         self.editor.viewport().update()
         if hasattr(config, "editor"):

@@ -577,6 +577,7 @@ class MainWindow(QMainWindow):
         """Handle external changes to notes directory without interrupting active typing."""
         if self._is_saving_internally:
             return
+        self.editor.clear_inactive_note_cache()
         current_path = str(self._current_note.path) if self._current_note else None
         self._refresh_notes(preserve_path=current_path, emit_selection=False)
 
@@ -709,6 +710,7 @@ class MainWindow(QMainWindow):
             self._current_note = Note.from_file(new_note.path)
             if self._current_note is not None:
                 self.editor.update_meta(self._current_note)
+                self.editor.register_created_note_in_cache(self._current_note)
                 self._refresh_notes(preserve_path=str(new_note.path), emit_selection=False)
                 self.backup_panel.refresh_status()
                 self.backup_panel.schedule_auto_backup()
@@ -740,6 +742,7 @@ class MainWindow(QMainWindow):
         # Update current note instance and card preview in memory without rescanning folder
         self._current_note = Note.from_memory(current_path, new_content, time.time())
         self.editor.update_meta(self._current_note)
+        self.editor.sync_active_cache_stat(current_path)
         self.note_list.update_note_card(str(current_path), self._current_note)
         self._upsert_current_note_in_list(current_path, self._current_note)
         self.backup_panel.refresh_status()
@@ -765,6 +768,7 @@ class MainWindow(QMainWindow):
         renamed_path = self.storage.rename_note_file(current_path, sanitized_title)
         if renamed_path != current_path:
             self._transfer_note_color(str(current_path), str(renamed_path))
+            self.editor.rename_cached_note(current_path, renamed_path)
             current_content = self.editor.get_content()
             self._current_note = Note.from_memory(renamed_path, current_content, time.time())
             self.editor.update_meta(self._current_note)
@@ -790,6 +794,7 @@ class MainWindow(QMainWindow):
             )
         if confirmed:
             self.config_manager.set_note_color(str(self._current_note.path), None)
+            self.editor.invalidate_note_cache(self._current_note.path)
             self.storage.delete_note(self._current_note.path)
             self._current_note = None
             self._refresh_notes()
@@ -837,6 +842,7 @@ class MainWindow(QMainWindow):
 
             renamed_folder = self.storage.rename_folder(folder_path, new_name)
             if renamed_folder is not None:
+                self.editor.invalidate_folder_cache(folder_path)
                 self._transfer_folder_color(folder_path.name, new_name)
                 if self._current_folder == folder_path:
                     self._current_folder = renamed_folder
@@ -870,6 +876,7 @@ class MainWindow(QMainWindow):
             )
         if confirmed:
             self.config_manager.set_folder_color(folder_path.name, None)
+            self.editor.invalidate_folder_cache(folder_path)
             self.storage.delete_folder(folder_path)
             if self._current_folder == folder_path:
                 self._current_folder = None
@@ -895,6 +902,7 @@ class MainWindow(QMainWindow):
         if confirmed:
             for f in folders:
                 self.config_manager.set_folder_color(f.name, None)
+                self.editor.invalidate_folder_cache(f)
             self.storage.delete_folders_batch(folders)
             if self._current_folder in folders:
                 self._current_folder = None
@@ -918,6 +926,7 @@ class MainWindow(QMainWindow):
             renamed_path = self.storage.rename_note_file(note.path, new_title)
             if renamed_path != note.path:
                 self._transfer_note_color(str(note.path), str(renamed_path))
+                self.editor.rename_cached_note(note.path, renamed_path)
 
             updated_note = Note.from_file(renamed_path)
             if updated_note is not None:
@@ -944,6 +953,7 @@ class MainWindow(QMainWindow):
             )
         if confirmed:
             self.config_manager.set_note_color(str(note.path), None)
+            self.editor.invalidate_note_cache(note.path)
             self.storage.delete_note(note.path)
             if self._current_note and self._current_note.path == note.path:
                 self._current_note = None
@@ -970,6 +980,7 @@ class MainWindow(QMainWindow):
             paths = [n.path for n in notes]
             for n in notes:
                 self.config_manager.set_note_color(str(n.path), None)
+                self.editor.invalidate_note_cache(n.path)
             self.storage.delete_notes_batch(paths)
             if self._current_note and self._current_note.path in paths:
                 self._current_note = None
@@ -1154,6 +1165,7 @@ class MainWindow(QMainWindow):
     def _on_sync_completed(self, success: bool, message: str) -> None:
         """Refresh sidebar folders and note list when remote notes are imported or synchronized."""
         if success:
+            self.editor.clear_inactive_note_cache()
             self.sidebar.set_folders(self.storage.get_folders(), current_selection=self._current_folder)
             self._update_watcher_paths()
             current_path = str(self._current_note.path) if self._current_note else None
@@ -1162,6 +1174,7 @@ class MainWindow(QMainWindow):
     def _on_note_reverted(self, rel_path: str) -> None:
         """Handle note reverted event from backup panel."""
         reverted_file = self.storage.root_dir / rel_path
+        self.editor.invalidate_note_cache(reverted_file)
         if self._current_note and self._current_note.path == reverted_file:
             reloaded = Note.from_file(reverted_file)
             if reloaded:
@@ -1172,6 +1185,7 @@ class MainWindow(QMainWindow):
         """Flush any unsaved debounced editor changes and wait for background disk writes."""
         self.editor.flush_pending_save()
         self._save_queue.wait_for_done()
+        self.editor.sync_active_cache_stat()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """Ensure any pending note edits and window geometry are persisted before exit."""
