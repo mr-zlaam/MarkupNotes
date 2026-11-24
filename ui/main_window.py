@@ -75,6 +75,7 @@ class MainWindow(QMainWindow):
         self._active_pane_anim: Optional[QVariantAnimation] = None
         self._registered_shortcuts: List[QShortcut] = []
         self._active_modal_overlay: Optional[QWidget] = None
+        self._is_initializing: bool = False
 
         # File system watcher for external edits
         self.watcher = QFileSystemWatcher(parent=self)
@@ -109,6 +110,7 @@ class MainWindow(QMainWindow):
         # 2. Middle: Note Cards List
         self.note_list = NoteListPanel(parent=self.splitter)
         self.note_list.note_selected.connect(self._on_note_selected)
+        self.note_list.note_clicked.connect(self._reveal_active_note_parents)
         self.note_list.create_note_requested.connect(self._on_create_note)
         self.note_list.search_query_changed.connect(self._on_search_filter)
         self.note_list.toggle_folders_requested.connect(self._toggle_sidebar)
@@ -134,6 +136,7 @@ class MainWindow(QMainWindow):
         self.editor.zoom_reset_requested.connect(self._on_zoom_reset)
         self.editor.word_wrap_toggled.connect(self._on_editor_word_wrap_toggled)
         self.editor.collapse_all_folders_requested.connect(self.sidebar.toggle_collapse_all_folders)
+        self.editor.focus_received.connect(self._on_editor_focus_received)
 
         # 4. Far Right: Backup & Version History Panel
         self.backup_panel = BackupPanel(
@@ -550,56 +553,60 @@ class MainWindow(QMainWindow):
 
     def _load_initial_data(self) -> None:
         """Load folders and restore the user's last active folder, note, cursor, and scroll offset."""
-        sort_order = self._get_sort_order()
-        self._applied_sort_order = sort_order
-        self.sidebar.set_root_dir(self.storage.root_dir)
-        self.sidebar.set_collapsed_folders(self.config.session.collapsed_folders)
-        self.sidebar.set_folder_colors(self.config.appearance.folder_colors)
-        self.note_list.set_note_colors(self.config.appearance.note_colors)
-        folders = self.storage.get_folders(sort_order=sort_order)
+        self._is_initializing = True
+        try:
+            sort_order = self._get_sort_order()
+            self._applied_sort_order = sort_order
+            self.sidebar.set_root_dir(self.storage.root_dir)
+            self.sidebar.set_collapsed_folders(self.config.session.collapsed_folders)
+            self.sidebar.set_folder_colors(self.config.appearance.folder_colors)
+            self.note_list.set_note_colors(self.config.appearance.note_colors)
+            folders = self.storage.get_folders(sort_order=sort_order)
 
-        # If an initial file or directory was requested (CLI or file manager), it takes priority
-        if self._initial_path is not None:
-            self.sidebar.set_folders(folders, sort_order=sort_order)
+            # If an initial file or directory was requested (CLI or file manager), it takes priority
+            if self._initial_path is not None:
+                self.sidebar.set_folders(folders, sort_order=sort_order)
+                self._update_watcher_paths()
+                self._refresh_notes()
+                self.open_file_or_folder(self._initial_path)
+                return
+
+            restored_folder: Optional[Path] = None
+            restored_note: Optional[Path] = None
+            restored_cursor = 0
+            restored_scroll = 0
+            if self.config.general.startup_action == "last_note":
+                sess = self.config.session
+                cand_folder = self._resolve_workspace_path(sess.last_folder, expect_dir=True)
+                if cand_folder is not None and cand_folder != self.storage.root_dir.resolve():
+                    restored_folder = cand_folder
+
+                cand_note = self._resolve_workspace_path(sess.last_note, expect_dir=False)
+                if cand_note is not None:
+                    if restored_folder is None or cand_note.parent == restored_folder:
+                        restored_note = cand_note
+                        restored_cursor = max(0, sess.last_cursor_pos)
+                        restored_scroll = max(0, sess.last_scroll_y)
+
+            self._current_folder = restored_folder
+            self.sidebar.set_folders(folders, current_selection=restored_folder, sort_order=sort_order)
             self._update_watcher_paths()
-            self._refresh_notes()
-            self.open_file_or_folder(self._initial_path)
-            return
 
-        restored_folder: Optional[Path] = None
-        restored_note: Optional[Path] = None
-        restored_cursor = 0
-        restored_scroll = 0
-        if self.config.general.startup_action == "last_note":
-            sess = self.config.session
-            cand_folder = self._resolve_workspace_path(sess.last_folder, expect_dir=True)
-            if cand_folder is not None and cand_folder != self.storage.root_dir.resolve():
-                restored_folder = cand_folder
+            if restored_note is not None:
+                self.editor.set_pending_restore_state(restored_note, restored_cursor, restored_scroll)
 
-            cand_note = self._resolve_workspace_path(sess.last_note, expect_dir=False)
-            if cand_note is not None:
-                if restored_folder is None or cand_note.parent == restored_folder:
-                    restored_note = cand_note
-                    restored_cursor = max(0, sess.last_cursor_pos)
-                    restored_scroll = max(0, sess.last_scroll_y)
+            self._refresh_notes(
+                preserve_path=str(restored_note) if restored_note is not None else None,
+                emit_selection=True,
+            )
 
-        self._current_folder = restored_folder
-        self.sidebar.set_folders(folders, current_selection=restored_folder, sort_order=sort_order)
-        self._update_watcher_paths()
-
-        if restored_note is not None:
-            self.editor.set_pending_restore_state(restored_note, restored_cursor, restored_scroll)
-
-        self._refresh_notes(
-            preserve_path=str(restored_note) if restored_note is not None else None,
-            emit_selection=True,
-        )
-
-        # Auto-create an initial note only on a brand-new empty workspace
-        if not self._all_current_notes and restored_folder is None and not folders:
-            self._on_create_note()
-        elif self._current_note is not None:
-            self.editor.editor.setFocus()
+            # Auto-create an initial note only on a brand-new empty workspace
+            if not self._all_current_notes and restored_folder is None and not folders:
+                self._on_create_note()
+            elif self._current_note is not None:
+                self.editor.editor.setFocus()
+        finally:
+            self._is_initializing = False
 
     def open_file_or_folder(self, target: Union[str, Path]) -> bool:
         """Open a Markdown file in the editor or a folder as the active workspace.
@@ -827,8 +834,19 @@ class MainWindow(QMainWindow):
                 f"Could not create folder '{folder_name}'. Please check disk permissions.",
             )
 
+    def _reveal_active_note_parents(self, note: Optional[Note]) -> None:
+        """Expand only the ancestor folders containing `note` in the sidebar tree."""
+        if self._is_initializing or note is None:
+            return
+        self.sidebar.reveal_folder(note.path.parent)
+
+    def _on_editor_focus_received(self) -> None:
+        """Reveal the currently active note's parent folders when editor text receives focus."""
+        self._reveal_active_note_parents(self._current_note)
+
     def _on_note_selected(self, note: Note) -> None:
         if self._current_note is not None and self._current_note.path == note.path:
+            self._reveal_active_note_parents(note)
             return
         prev_note = self._current_note
         self.flush_pending_save()
@@ -836,6 +854,7 @@ class MainWindow(QMainWindow):
             prev_note.content = None
         self._current_note = note
         self.editor.load_note(note)
+        self._reveal_active_note_parents(note)
         self._schedule_session_save()
 
     def _on_create_note(self) -> None:

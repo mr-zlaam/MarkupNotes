@@ -16,6 +16,7 @@ from PyQt6.QtGui import (
     QColor,
     QContextMenuEvent,
     QDesktopServices,
+    QFocusEvent,
     QFont,
     QFontMetricsF,
     QKeyEvent,
@@ -197,6 +198,7 @@ class MarkdownEditor(QTextEdit):
     zoom_changed = pyqtSignal(int)
     word_wrap_toggled = pyqtSignal(bool)
     collapse_all_folders_requested = pyqtSignal()
+    focus_received = pyqtSignal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent=parent)
@@ -2828,6 +2830,11 @@ class MarkdownEditor(QTextEdit):
         self.viewport().setCursor(Qt.CursorShape.IBeamCursor)
         QToolTip.hideText()
 
+    def focusInEvent(self, event: QFocusEvent) -> None:
+        """Notify listeners when the editor text canvas receives focus."""
+        super().focusInEvent(event)
+        self.focus_received.emit()
+
     def mousePressEvent(self, event: QMouseEvent) -> None:
         """Handle clicking directly on checkboxes, buttons, scrollbars, or Ctrl+Click on links."""
         if self.slash_palette.isVisible():
@@ -3764,6 +3771,7 @@ class EditorPanel(QWidget):
     zoom_changed = pyqtSignal(int)
     word_wrap_toggled = pyqtSignal(bool)
     collapse_all_folders_requested = pyqtSignal()
+    focus_received = pyqtSignal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent=parent)
@@ -3902,6 +3910,7 @@ class EditorPanel(QWidget):
         self.editor.zoom_reset_requested.connect(self.zoom_reset_requested.emit)
         self.editor.word_wrap_toggled.connect(self.word_wrap_toggled.emit)
         self.editor.collapse_all_folders_requested.connect(self.collapse_all_folders_requested.emit)
+        self.editor.focus_received.connect(self.focus_received.emit)
 
         # In-note Find & Replace Bar
         self.find_replace_bar = FindReplaceBar(parent=self)

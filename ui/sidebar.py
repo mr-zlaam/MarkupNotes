@@ -536,6 +536,54 @@ class FolderSidebar(QWidget):
         """Ensure a specific folder is marked expanded (e.g. after creating a subfolder inside it)."""
         self._collapsed_keys.discard(self._folder_key(folder))
 
+    def _find_item_for_folder(self, target: Path) -> Optional[QTreeWidgetItem]:
+        """Locate the QTreeWidgetItem corresponding to `target` folder path."""
+
+        def _walk(item: QTreeWidgetItem) -> Optional[QTreeWidgetItem]:
+            folder = item.data(0, Qt.ItemDataRole.UserRole)
+            if folder is not None and folder == target:
+                return item
+            for c in range(item.childCount()):
+                found = _walk(item.child(c))
+                if found is not None:
+                    return found
+            return None
+
+        for i in range(self.tree_widget.topLevelItemCount()):
+            found = _walk(self.tree_widget.topLevelItem(i))
+            if found is not None:
+                return found
+        return None
+
+    def reveal_folder(self, folder: Optional[Path]) -> None:
+        """Expand only the ancestor folders needed to reveal `folder` in the sidebar tree."""
+        if folder is None or (self._root_dir is not None and folder == self._root_dir):
+            return
+        item = self._find_item_for_folder(folder)
+        if item is None:
+            return
+
+        changed = False
+        self.tree_widget.blockSignals(True)
+        anc = item.parent()
+        while anc is not None:
+            if not anc.isExpanded():
+                anc.setExpanded(True)
+                changed = True
+            anc_folder = anc.data(0, Qt.ItemDataRole.UserRole)
+            if anc_folder is not None:
+                self._collapsed_keys.discard(self._folder_key(anc_folder))
+            anc = anc.parent()
+        self.tree_widget.blockSignals(False)
+
+        if changed:
+            if not self._is_selection_mode:
+                current_item = self.tree_widget.currentItem()
+                for i in range(self.tree_widget.topLevelItemCount()):
+                    self._refresh_folder_icon_state(self.tree_widget.topLevelItem(i), current_item)
+            self._update_collapse_all_button_state()
+            self.folder_expansion_changed.emit()
+
     def _iter_expandable_items(self) -> List[QTreeWidgetItem]:
         """Collect all tree items that have at least one child folder."""
         expandable: List[QTreeWidgetItem] = []

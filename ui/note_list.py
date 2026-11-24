@@ -201,6 +201,7 @@ class NoteListPanel(QWidget):
     """Middle panel displaying search bar, note cards, batch selection, and right-click actions."""
 
     note_selected = pyqtSignal(object)  # Emits Note instance
+    note_clicked = pyqtSignal(object)  # Emits Note instance even when already selected
     create_note_requested = pyqtSignal()
     search_query_changed = pyqtSignal(str)
     toggle_folders_requested = pyqtSignal()
@@ -459,10 +460,13 @@ class NoteListPanel(QWidget):
 
     def _on_item_clicked(self, item: QListWidgetItem) -> None:
         """Handle clicks on note cards."""
+        note = item.data(Qt.ItemDataRole.UserRole)
         if self._is_selection_mode:
-            note = item.data(Qt.ItemDataRole.UserRole)
             if note is not None:
                 self.toggle_note_selection(str(note.path))
+            return
+        if note is not None:
+            self.note_clicked.emit(note)
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         """Handle keyboard shortcuts such as Delete/Backspace on note list."""

@@ -240,6 +240,61 @@ class TestSessionRestore(unittest.TestCase):
             win4.deleteLater()
             self.app.processEvents()
 
+    def test_auto_reveal_only_active_note_parents_on_click_or_editor_focus(self) -> None:
+        """Clicking a note card or focusing editor text expands only that file's ancestor folders."""
+        sprint_dir = self.notes_dir / "Work" / "Projects" / "Sprint1"
+        sprint_dir.mkdir(parents=True, exist_ok=True)
+        deep_file = sprint_dir / "DeepSpec.md"
+        deep_file.write_text("# DeepSpec\nBody text", encoding="utf-8")
+
+        personal_sub = self.notes_dir / "Personal" / "Journal"
+        personal_sub.mkdir(parents=True, exist_ok=True)
+
+        win = self._new_window()
+        win.show()
+        self.app.processEvents()
+        try:
+            # Find DeepSpec note in All Notes and select it
+            deep_note = next(n for n in win._all_current_notes if n.path == deep_file)
+            win._on_note_selected(deep_note)
+            self.app.processEvents()
+
+            # Collapse all folders while DeepSpec is open
+            win.sidebar.collapse_all_btn.click()
+            self.app.processEvents()
+            self.assertTrue(win.sidebar.are_all_folders_collapsed())
+
+            work_item = win.sidebar._find_item_for_folder(self.notes_dir / "Work")
+            proj_item = win.sidebar._find_item_for_folder(self.notes_dir / "Work" / "Projects")
+            pers_item = win.sidebar._find_item_for_folder(self.notes_dir / "Personal")
+            self.assertFalse(work_item.isExpanded())
+            self.assertFalse(proj_item.isExpanded())
+            self.assertFalse(pers_item.isExpanded())
+
+            # 1. Clicking filename card in NoteListPanel reveals only Work -> Projects
+            win.note_list.note_clicked.emit(deep_note)
+            self.app.processEvents()
+            self.assertTrue(work_item.isExpanded())
+            self.assertTrue(proj_item.isExpanded())
+            self.assertFalse(pers_item.isExpanded())
+
+            # 2. Collapse all again, move focus to sidebar, then focus editor text -> reveals only Work -> Projects
+            win.sidebar.collapse_all_btn.click()
+            win.sidebar.tree_widget.setFocus()
+            self.app.processEvents()
+            self.assertFalse(work_item.isExpanded())
+            self.assertFalse(proj_item.isExpanded())
+
+            win.editor.editor.setFocus()
+            self.app.processEvents()
+            self.assertTrue(work_item.isExpanded())
+            self.assertTrue(proj_item.isExpanded())
+            self.assertFalse(pers_item.isExpanded())
+        finally:
+            win.close()
+            win.deleteLater()
+            self.app.processEvents()
+
 
 if __name__ == "__main__":
     unittest.main()
