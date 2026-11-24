@@ -3813,6 +3813,70 @@ class MarkdownEditor(QTextEdit):
         self.viewport().update()
 
 
+class _LoadingSpinnerOverlay(QWidget):
+    """Floating pill overlay with a smooth animated arc spinner and concise 'Loading...' text."""
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent=parent)
+        self._angle: int = 0
+        self._timer = QTimer(self)
+        self._timer.setInterval(16)
+        self._timer.timeout.connect(self._advance_frame)
+
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setFixedHeight(38)
+        self.setMinimumWidth(116)
+
+    def _advance_frame(self) -> None:
+        self._angle = (self._angle + 8) % 360
+        self.update()
+
+    def setVisible(self, visible: bool) -> None:
+        super().setVisible(visible)
+        if visible:
+            if not self._timer.isActive():
+                self._timer.start()
+        elif self._timer.isActive():
+            self._timer.stop()
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        # Rounded dark pill container
+        pill_rect = QRectF(0.5, 0.5, self.width() - 1.0, self.height() - 1.0)
+        painter.setPen(QPen(QColor("#3a3a40"), 1.0))
+        painter.setBrush(QColor(32, 32, 36, 235))
+        painter.drawRoundedRect(pill_rect, 10.0, 10.0)
+
+        # Smooth circular spinner on the left
+        spinner_size = 16.0
+        spinner_x = 14.0
+        spinner_y = (self.height() - spinner_size) / 2.0
+        spinner_rect = QRectF(spinner_x, spinner_y, spinner_size, spinner_size)
+
+        track_pen = QPen(QColor(255, 255, 255, 40), 2.0)
+        painter.setPen(track_pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawEllipse(spinner_rect)
+
+        arc_pen = QPen(QColor("#e5e5ea"), 2.0)
+        arc_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(arc_pen)
+        # Qt angles are in 1/16th of a degree (negative for clockwise)
+        painter.drawArc(spinner_rect, -self._angle * 16, -110 * 16)
+
+        # Crisp "Loading..." label
+        painter.setPen(QColor("#e5e5ea"))
+        font = painter.font()
+        font.setPointSize(9)
+        font.setWeight(QFont.Weight.Medium)
+        painter.setFont(font)
+        text_rect = QRectF(spinner_x + spinner_size + 10.0, 0.0, self.width() - (spinner_x + spinner_size + 22.0), float(self.height()))
+        painter.drawText(text_rect, int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft), "Loading...")
+        painter.end()
+
+
 class EditorPanel(QWidget):
     """Right pane editor containing metadata header, note title, and the editor canvas."""
 
@@ -3989,21 +4053,8 @@ class EditorPanel(QWidget):
 
         self.find_replace_bar.setVisible(False)
 
-        # Subtle floating loading indicator for large notes (>= 500 KB) on first open
-        self._loading_overlay = QLabel("Loading large note...", parent=self)
-        self._loading_overlay.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._loading_overlay.setStyleSheet("""
-            QLabel {
-                background-color: rgba(32, 32, 36, 235);
-                color: #e5e5ea;
-                border: 1px solid #3a3a40;
-                border-radius: 8px;
-                padding: 8px 16px;
-                font-size: 12px;
-                font-weight: 500;
-            }
-        """)
-        self._loading_overlay.adjustSize()
+        # Subtle floating loading spinner for large notes (>= 500 KB) on first open
+        self._loading_overlay = _LoadingSpinnerOverlay(parent=self)
         self._loading_overlay.setVisible(False)
 
         layout.addWidget(self.editor)
@@ -4546,10 +4597,8 @@ class EditorPanel(QWidget):
             self.editor.setReadOnly(True)
             self.editor.blockSignals(False)
 
-            size_mb = size_bytes / (1024 * 1024)
-            self.meta_label.setText(f"Loading large note ({size_mb:.1f} MB)...")
+            self.meta_label.setText("Loading...")
             self.word_count_label.setText("Loading...")
-            self._loading_overlay.setText(f"Loading large note ({size_mb:.1f} MB)...")
             self._position_loading_overlay()
             self._loading_overlay.show()
             self._loading_overlay.repaint()

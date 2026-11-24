@@ -179,12 +179,14 @@ class TestDocCacheAndLoader(unittest.TestCase):
         self.panel.load_note(big_note)
         self.assertTrue(self.panel._is_loading_note)
         self.assertTrue(self.panel.editor.isReadOnly())
-        self.assertIn("Loading large note", self.panel.meta_label.text())
+        self.assertEqual(self.panel.meta_label.text(), "Loading...")
+        self.assertTrue(self.panel._loading_overlay._timer.isActive())
 
         # Immediately cancel by switching to small note!
         self.panel.load_note(small_note)
         self.assertFalse(self.panel._is_loading_note)
         self.assertFalse(self.panel.editor.isReadOnly())
+        self.assertFalse(self.panel._loading_overlay._timer.isActive())
         self.assertEqual(self.panel.editor.toPlainText(), "# Quick Note")
 
         # Let background worker finish -> stale result must be ignored!
